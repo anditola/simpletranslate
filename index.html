@@ -493,7 +493,13 @@ async function speak(text, lang) {
     const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'tts-1', voice: 'nova', input: text, response_format: 'mp3' })
+      body: JSON.stringify({
+        model: 'gpt-4o-mini-tts',
+        voice: 'nova',
+        input: text,
+        response_format: 'mp3',
+        instructions: `Speak the given text in ${LANG_NAMES[lang]} with natural, native pronunciation. The text is in ${LANG_NAMES[lang]} — do not switch language.`
+      })
     });
     if (!ttsRes.ok) throw new Error('TTS: ' + await ttsRes.text());
     const audioBlob = await ttsRes.blob();
