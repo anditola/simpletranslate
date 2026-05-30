@@ -51,7 +51,9 @@
   .meter i { display: block; width: 6px; height: 8%; background: currentColor; border-radius: 3px; transition: height 60ms linear; }
 
   /* action buttons (replay/copy) next to source / translated text */
-  .result .source, .result .translated { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
+  .result .source { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
+  .result .translated { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .result .translated .actions { display: flex; align-items: center; gap: 10px; }
   .icon-btn { background: none; border: 1.5px solid currentColor; border-radius: 999px; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: inherit; opacity: 0.55; transition: opacity 0.15s, transform 0.1s; padding: 0; flex-shrink: 0; }
   @media (hover: hover) { .icon-btn:hover { opacity: 1; } }
   .icon-btn:active { transform: scale(0.92); opacity: 1; }
@@ -650,7 +652,7 @@ async function processAudio(blob, sourceLang, targetLang, audioSec) {
     });
 
     document.getElementById('result-' + targetLang).innerHTML =
-      `<div class="translated"><span>${esc(translatedText)}</span>${replayBtn('tts')}${slowBtn('tts')}${copyBtn()}</div>`;
+      `<div class="translated"><span>${esc(translatedText)}</span><div class="actions">${replayBtn('tts')}${slowBtn('tts')}${copyBtn()}</div></div>`;
     setStatus(sourceLang, 'idle');
     document.querySelector(`.half[data-lang="${sourceLang}"]`).classList.remove('processing');
     busy = false;
