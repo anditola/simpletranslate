@@ -44,9 +44,9 @@
   .skeleton .line.short { width: 60%; }
   @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
 
-  /* live audio meter while recording */
+  /* live audio meter while recording OR while playing back */
   .meter { display: none; align-items: flex-end; justify-content: center; gap: 5px; height: 56px; margin-top: 18px; }
-  .half.recording .meter { display: flex; }
+  .half.recording .meter, .half.playing .meter { display: flex; }
   .meter i { display: block; width: 6px; height: 8%; background: currentColor; border-radius: 3px; opacity: 0.85; transition: height 60ms linear; }
 
   /* replay button next to source / translated text */
@@ -102,6 +102,7 @@ let busy = false;
 let micStream = null;
 let audioCtx = null, analyser = null, meterSource = null, meterStream = null, meterRaf = null;
 let lastSourceUrl = null, lastTtsUrl = null;
+let activePlayback = null;
 
 const keyBar = document.getElementById('keyBar');
 const keyInput = document.getElementById('keyInput');
@@ -139,7 +140,9 @@ document.addEventListener('click', e => {
   if (!btn) return;
   e.stopPropagation();
   const url = btn.dataset.replay === 'source' ? lastSourceUrl : lastTtsUrl;
-  if (url) new Audio(url).play().catch(() => {});
+  if (!url) return;
+  const lang = btn.closest('.half').dataset.lang;
+  playAudioWithMeter(url, lang);
 });
 
 async function ensureMicStream() {
@@ -180,15 +183,75 @@ function startMeter(stream, lang) {
   tick();
 }
 
-function stopMeter() {
+function stopMeter(lang) {
   if (meterRaf) cancelAnimationFrame(meterRaf);
   meterRaf = null;
-  document.querySelectorAll('.meter i').forEach(b => b.style.height = '8%');
+  const sel = lang ? `.half[data-lang="${lang}"] .meter i` : '.meter i';
+  document.querySelectorAll(sel).forEach(b => b.style.height = '8%');
+}
+
+async function playAudioWithMeter(url, lang) {
+  stopPlayback();
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+  const audio = new Audio(url);
+  const source = audioCtx.createMediaElementSource(audio);
+  const an = audioCtx.createAnalyser();
+  an.fftSize = 64;
+  an.smoothingTimeConstant = 0.6;
+  source.connect(an);
+  an.connect(audioCtx.destination);
+
+  const half = document.querySelector(`.half[data-lang="${lang}"]`);
+  half.classList.add('playing');
+  const bars = half.querySelectorAll('.meter i');
+  const N = bars.length;
+  const data = new Uint8Array(an.frequencyBinCount);
+  const binSize = Math.max(1, Math.floor(data.length / N));
+  let raf;
+  function tick() {
+    an.getByteFrequencyData(data);
+    for (let i = 0; i < N; i++) {
+      let sum = 0;
+      for (let j = 0; j < binSize; j++) sum += data[i * binSize + j] || 0;
+      const avg = sum / binSize;
+      bars[i].style.height = Math.min(100, 8 + (avg / 255) * 130) + '%';
+    }
+    raf = requestAnimationFrame(tick);
+  }
+
+  const cleanup = () => {
+    if (raf) cancelAnimationFrame(raf);
+    half.classList.remove('playing');
+    bars.forEach(b => b.style.height = '8%');
+    try { source.disconnect(); an.disconnect(); } catch (e) {}
+    if (activePlayback && activePlayback.audio === audio) activePlayback = null;
+  };
+  audio.addEventListener('ended', cleanup);
+  audio.addEventListener('pause', cleanup);
+  audio.addEventListener('error', cleanup);
+
+  activePlayback = { audio, cleanup };
+  try {
+    await audio.play();
+    tick();
+  } catch (e) {
+    cleanup();
+  }
+}
+
+function stopPlayback() {
+  if (activePlayback) {
+    try { activePlayback.audio.pause(); } catch (e) {}
+    activePlayback = null;
+  }
 }
 
 async function startRecording(lang, target) {
   if (!apiKey) { keyBar.classList.remove('hidden'); keyInput.focus(); return; }
   try {
+    stopPlayback();
     clearResult(lang);
     clearResult(target);
     const stream = await ensureMicStream();
@@ -217,7 +280,7 @@ function stopRecording() {
     const half = document.querySelector(`.half[data-lang="${lang}"]`);
     const target = half.dataset.target;
     mediaRecorder.stop();
-    stopMeter();
+    stopMeter(lang);
     half.classList.remove('recording');
     half.classList.add('processing');
     setStatus(lang, 'transcribing');
@@ -287,7 +350,7 @@ async function processAudio(blob, sourceLang, targetLang) {
     busy = false;
 
     // 3. TTS — fire-and-forget so user can already start the next recording
-    speak(translatedText);
+    speak(translatedText, targetLang);
   } catch (err) {
     console.error(err);
     alert('Fehler: ' + err.message);
@@ -298,7 +361,7 @@ async function processAudio(blob, sourceLang, targetLang) {
   }
 }
 
-async function speak(text) {
+async function speak(text, lang) {
   try {
     const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
@@ -309,7 +372,7 @@ async function speak(text) {
     const audioBlob = await ttsRes.blob();
     if (lastTtsUrl) URL.revokeObjectURL(lastTtsUrl);
     lastTtsUrl = URL.createObjectURL(audioBlob);
-    new Audio(lastTtsUrl).play().catch(() => {});
+    playAudioWithMeter(lastTtsUrl, lang);
   } catch (err) {
     console.error(err);
   }
