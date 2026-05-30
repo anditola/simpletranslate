@@ -84,7 +84,13 @@
   .history-item .actions { display: flex; gap: 8px; align-items: center; }
   .history-item .icon-btn { width: 34px; height: 34px; border-width: 1px; }
   .history-item .icon-btn svg { width: 16px; height: 16px; }
-  .history-item .cost { margin-left: auto; font-size: 11px; opacity: 0.55; font-family: ui-monospace, SFMono-Regular, monospace; cursor: help; letter-spacing: 0.2px; }
+  .history-item .icon-btn.delete { border-color: rgba(255,255,255,0.15); opacity: 0.35; }
+  .history-item .icon-btn.delete:hover { opacity: 1; color: #e07a7a; border-color: #e07a7a; }
+  .history-item .cost { font-size: 11px; opacity: 0.55; font-family: ui-monospace, SFMono-Regular, monospace; cursor: help; letter-spacing: 0.2px; margin-left: auto; }
+  .head-actions { display: flex; align-items: center; gap: 8px; }
+  .overlay-reset { background: none; border: 1px solid #3a3733; color: inherit; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; opacity: 0.7; font-family: inherit; }
+  .overlay-reset:hover:not(:disabled) { opacity: 1; background: rgba(224,122,122,0.12); border-color: #e07a7a; color: #e07a7a; }
+  .overlay-reset:disabled { opacity: 0.25; cursor: not-allowed; }
   .history-empty { padding: 28px 12px; text-align: center; opacity: 0.5; font-size: 14px; }
   #historyTotal { font-size: 12px; opacity: 0.55; font-weight: 400; font-family: ui-monospace, SFMono-Regular, monospace; margin-left: 6px; letter-spacing: 0.2px; }
 
@@ -213,7 +219,10 @@
   <div class="overlay-card">
     <div class="overlay-head">
       <h2>Verlauf <span id="historyTotal"></span></h2>
-      <button class="overlay-close" id="historyClose" aria-label="Schließen">×</button>
+      <div class="head-actions">
+        <button class="overlay-reset" id="historyReset" title="Alle Einträge löschen">Alle löschen</button>
+        <button class="overlay-close" id="historyClose" aria-label="Schließen">×</button>
+      </div>
     </div>
     <div class="overlay-body" id="historyList"></div>
   </div>
@@ -225,6 +234,7 @@ const SVG = {
   mic: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>',
   copy: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.58-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54A.5.5 0 0 0 13.93 2h-3.84a.5.5 0 0 0-.49.42l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.58.22L2.74 8.48a.5.5 0 0 0 .12.61l2.03 1.58c-.04.31-.07.63-.07.94 0 .31.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.39.31.61.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.06.24.27.42.49.42h3.84c.24 0 .44-.18.49-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.09.49 0 .61-.22l1.92-3.32c.12-.22.07-.49-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>'
 };
 
@@ -279,7 +289,7 @@ let micStream = null;
 let audioCtx = null, analyser = null, meterSource = null, meterStream = null, meterRaf = null;
 let lastSourceBlob = null, lastTtsBlob = null;
 let activePlayback = null;
-const history = []; // newest at end, max 5
+const history = []; // newest at end, unlimited (persisted in IndexedDB)
 
 const keyOverlay = document.getElementById('keyOverlay');
 const keyInput = document.getElementById('keyInput');
@@ -387,10 +397,11 @@ document.addEventListener('click', e => {
   const h = history[idx];
   if (!h) return;
   const action = btn.dataset.hAction;
-  if      (action === 'src'  && h.sourceBlob) playAudioWithMeter(h.sourceBlob, h.sourceLang);
-  else if (action === 'tts'  && h.ttsBlob)    playAudioWithMeter(h.ttsBlob,    h.targetLang);
-  else if (action === 'slow' && h.ttsBlob)    playAudioWithMeter(h.ttsBlob,    h.targetLang, 0.7);
-  else if (action === 'copy')                 copyToClipboard(btn, h.translatedText);
+  if      (action === 'src'    && h.sourceBlob) playAudioWithMeter(h.sourceBlob, h.sourceLang);
+  else if (action === 'tts'    && h.ttsBlob)    playAudioWithMeter(h.ttsBlob,    h.targetLang);
+  else if (action === 'slow'   && h.ttsBlob)    playAudioWithMeter(h.ttsBlob,    h.targetLang, 0.7);
+  else if (action === 'copy')                   copyToClipboard(btn, h.translatedText);
+  else if (action === 'delete')                 deleteHistoryEntry(idx);
 });
 
 async function ensureMicStream() {
@@ -733,7 +744,6 @@ async function copyToClipboard(btn, text) {
 
 function recordHistory(entry) {
   history.push(entry);
-  if (history.length > 5) history.shift();
   dbSaveHistory(entry);
 }
 
@@ -765,7 +775,7 @@ async function dbLoadHistory() {
       const req = tx.objectStore(DB_STORE).getAll();
       req.onsuccess = () => {
         const all = (req.result || []).sort((a, b) => a.id - b.id);
-        resolve(all.slice(-5));
+        resolve(all);
       };
       req.onerror = () => resolve([]);
     });
@@ -774,26 +784,50 @@ async function dbLoadHistory() {
 async function dbSaveHistory(entry) {
   try {
     const db = await getDB();
-    const tx = db.transaction(DB_STORE, 'readwrite');
-    const store = tx.objectStore(DB_STORE);
-    store.add({
-      sourceLang: entry.sourceLang, targetLang: entry.targetLang,
-      sourceText: entry.sourceText, translatedText: entry.translatedText,
-      sourceBlob: entry.sourceBlob, ttsBlob: entry.ttsBlob,
-      cost: entry.cost, timestamp: Date.now()
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, 'readwrite');
+      const req = tx.objectStore(DB_STORE).add({
+        sourceLang: entry.sourceLang, targetLang: entry.targetLang,
+        sourceText: entry.sourceText, translatedText: entry.translatedText,
+        sourceBlob: entry.sourceBlob, ttsBlob: entry.ttsBlob,
+        cost: entry.cost, timestamp: Date.now()
+      });
+      req.onsuccess = () => { entry.id = req.result; resolve(req.result); };
+      req.onerror = () => reject(req.error);
     });
-    const all = await new Promise(resolve => {
-      const r = store.getAll();
-      r.onsuccess = () => resolve(r.result || []);
-    });
-    if (all.length > 5) {
-      const sorted = all.sort((a, b) => a.id - b.id);
-      sorted.slice(0, sorted.length - 5).forEach(e => store.delete(e.id));
-    }
   } catch (e) { console.error('IDB save failed', e); }
+}
+async function dbDeleteEntry(id) {
+  try {
+    const db = await getDB();
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    tx.objectStore(DB_STORE).delete(id);
+  } catch (e) { console.error('IDB delete failed', e); }
+}
+async function dbClearAll() {
+  try {
+    const db = await getDB();
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    tx.objectStore(DB_STORE).clear();
+  } catch (e) { console.error('IDB clear failed', e); }
+}
+async function deleteHistoryEntry(idx) {
+  const h = history[idx];
+  if (!h) return;
+  if (h.id != null) await dbDeleteEntry(h.id);
+  history.splice(idx, 1);
+  renderHistory();
+}
+async function clearHistoryAll() {
+  if (!history.length) return;
+  if (!confirm(`Alle ${history.length} Einträge wirklich löschen?`)) return;
+  await dbClearAll();
+  history.length = 0;
+  renderHistory();
 }
 // Restore previous session's history on load
 dbLoadHistory().then(entries => { history.push(...entries); });
+document.getElementById('historyReset').onclick = clearHistoryAll;
 
 const historyOverlay = document.getElementById('historyOverlay');
 function openHistory() { renderHistory(); historyOverlay.classList.remove('hidden'); }
@@ -810,6 +844,8 @@ document.addEventListener('keydown', e => {
 function renderHistory() {
   const list = document.getElementById('historyList');
   const totalEl = document.getElementById('historyTotal');
+  const resetBtn = document.getElementById('historyReset');
+  resetBtn.disabled = history.length === 0;
   if (history.length === 0) {
     list.innerHTML = '<div class="history-empty">Noch nichts übersetzt.</div>';
     totalEl.textContent = '';
@@ -837,6 +873,7 @@ function renderHistory() {
         <button class="icon-btn slow" data-h-action="slow" data-h-idx="${idx}" title="Übersetzung langsam (0.7×)">0.7×</button>
         <button class="icon-btn copy" data-h-action="copy" data-h-idx="${idx}" title="Übersetzung kopieren">${SVG.copy}</button>
         ${costHtml}
+        <button class="icon-btn delete" data-h-action="delete" data-h-idx="${idx}" title="Eintrag löschen">${SVG.trash}</button>
       </div>
     </div>`;
   }).join('');
