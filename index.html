@@ -58,11 +58,11 @@
   .icon-btn svg { width: 22px; height: 22px; }
   .icon-btn.copied { opacity: 1; }
 
-  /* top-right toolbar (history + key) */
-  .topbar { position: fixed; top: 8px; right: 10px; display: flex; gap: 2px; z-index: 15; }
-  .topbar button { background: none; border: none; color: inherit; opacity: 0.35; cursor: pointer; padding: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1; }
-  .topbar button:hover { opacity: 0.85; }
-  .topbar button svg { width: 18px; height: 18px; }
+  /* top-right toolbar (history + key) — always on the dark half, so explicit white */
+  .topbar { position: fixed; top: 10px; right: 12px; display: flex; gap: 6px; z-index: 15; }
+  .topbar button { background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); color: #fff; opacity: 0.85; cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1; width: 38px; height: 38px; border-radius: 999px; transition: opacity 0.15s, background 0.15s; }
+  .topbar button:hover { opacity: 1; background: rgba(255,255,255,0.22); }
+  .topbar button svg { width: 20px; height: 20px; }
 
   /* history overlay */
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 30; padding: 16px; }
@@ -95,8 +95,9 @@
     .result .source { font-size: 14px; margin-bottom: 6px; }
     #keyBar span { display: none; }
     #keyBar { padding: 6px 8px; }
-    .topbar { top: 4px; right: 6px; }
-    .topbar button { padding: 6px; }
+    .topbar { top: 6px; right: 8px; gap: 4px; }
+    .topbar button { width: 34px; height: 34px; }
+    .topbar button svg { width: 18px; height: 18px; }
   }
 
   /* very short viewports — e.g. landscape phone */
