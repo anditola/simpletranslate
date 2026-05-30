@@ -129,7 +129,7 @@ let recordingLang = null;
 let busy = false;
 let micStream = null;
 let audioCtx = null, analyser = null, meterSource = null, meterStream = null, meterRaf = null;
-let lastSourceUrl = null, lastTtsUrl = null;
+let lastSourceBlob = null, lastTtsBlob = null;
 let activePlayback = null;
 
 const keyBar = document.getElementById('keyBar');
@@ -167,10 +167,10 @@ document.addEventListener('click', e => {
   const btn = e.target.closest('.replay');
   if (!btn) return;
   e.stopPropagation();
-  const url = btn.dataset.replay === 'source' ? lastSourceUrl : lastTtsUrl;
-  if (!url) return;
+  const blob = btn.dataset.replay === 'source' ? lastSourceBlob : lastTtsBlob;
+  if (!blob) return;
   const lang = btn.closest('.half').dataset.lang;
-  playAudioWithMeter(url, lang);
+  playAudioWithMeter(blob, lang);
 });
 
 async function ensureMicStream() {
@@ -218,13 +218,25 @@ function stopMeter(lang) {
   document.querySelectorAll(sel).forEach(b => b.style.height = '8%');
 }
 
-async function playAudioWithMeter(url, lang) {
+async function playAudioWithMeter(blob, lang) {
   stopPlayback();
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-  const audio = new Audio(url);
-  const source = audioCtx.createMediaElementSource(audio);
+  // Fully decode before playback so we don't clip the first samples
+  // (which happens with MediaElementAudioSource + AnalyserNode while the
+  // <audio> element is still buffering).
+  let audioBuffer;
+  try {
+    const arrayBuf = await blob.arrayBuffer();
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
+  } catch (err) {
+    console.error('Decode failed:', err);
+    return;
+  }
+
+  const source = audioCtx.createBufferSource();
+  source.buffer = audioBuffer;
   const an = audioCtx.createAnalyser();
   an.fftSize = 64;
   an.smoothingTimeConstant = 0.6;
@@ -249,29 +261,27 @@ async function playAudioWithMeter(url, lang) {
     raf = requestAnimationFrame(tick);
   }
 
+  let cleaned = false;
   const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     if (raf) cancelAnimationFrame(raf);
     half.classList.remove('playing');
     bars.forEach(b => b.style.height = '8%');
     try { source.disconnect(); an.disconnect(); } catch (e) {}
-    if (activePlayback && activePlayback.audio === audio) activePlayback = null;
+    if (activePlayback && activePlayback.source === source) activePlayback = null;
   };
-  audio.addEventListener('ended', cleanup);
-  audio.addEventListener('pause', cleanup);
-  audio.addEventListener('error', cleanup);
+  source.onended = cleanup;
 
-  activePlayback = { audio, cleanup };
-  try {
-    await audio.play();
-    tick();
-  } catch (e) {
-    cleanup();
-  }
+  activePlayback = { source, cleanup };
+  source.start(0);
+  tick();
 }
 
 function stopPlayback() {
   if (activePlayback) {
-    try { activePlayback.audio.pause(); } catch (e) {}
+    try { activePlayback.source.stop(); } catch (e) {}
+    activePlayback.cleanup && activePlayback.cleanup();
     activePlayback = null;
   }
 }
@@ -331,8 +341,7 @@ function clearResult(lang) {
 
 async function processAudio(blob, sourceLang, targetLang) {
   busy = true;
-  if (lastSourceUrl) URL.revokeObjectURL(lastSourceUrl);
-  lastSourceUrl = URL.createObjectURL(blob);
+  lastSourceBlob = blob;
   try {
     // 1. STT
     const fd = new FormData();
@@ -398,9 +407,8 @@ async function speak(text, lang) {
     });
     if (!ttsRes.ok) throw new Error('TTS: ' + await ttsRes.text());
     const audioBlob = await ttsRes.blob();
-    if (lastTtsUrl) URL.revokeObjectURL(lastTtsUrl);
-    lastTtsUrl = URL.createObjectURL(audioBlob);
-    playAudioWithMeter(lastTtsUrl, lang);
+    lastTtsBlob = audioBlob;
+    playAudioWithMeter(audioBlob, lang);
   } catch (err) {
     console.error(err);
   }
