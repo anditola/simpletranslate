@@ -456,25 +456,46 @@ async function playAudioWithMeter(blob, lang, playbackRate = 1) {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-  // Fully decode before playback so we don't clip the first samples
-  // (which happens with MediaElementAudioSource + AnalyserNode while the
-  // <audio> element is still buffering).
-  let audioBuffer;
-  try {
-    const arrayBuf = await blob.arrayBuffer();
-    audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
-  } catch (err) {
-    console.error('Decode failed:', err);
-    return;
-  }
-
-  const source = audioCtx.createBufferSource();
-  source.buffer = audioBuffer;
-  source.playbackRate.value = playbackRate;
   const an = audioCtx.createAnalyser();
   an.fftSize = 64;
   an.smoothingTimeConstant = 0.6;
-  source.connect(an);
+
+  let source, audio, blobUrl, sourceType, start;
+  if (playbackRate === 1) {
+    // BufferSource: fully decoded → exact start, no clipped first samples
+    let buf;
+    try {
+      const ab = await blob.arrayBuffer();
+      buf = await audioCtx.decodeAudioData(ab);
+    } catch (err) { console.error('Decode failed:', err); return; }
+    source = audioCtx.createBufferSource();
+    source.buffer = buf;
+    source.connect(an);
+    sourceType = 'buf';
+    start = () => source.start(0);
+  } else {
+    // HTMLAudioElement: preservesPitch keeps the voice while slowing down.
+    // AudioBufferSourceNode.playbackRate would pitch-shift, which sounds
+    // like a different speaker.
+    blobUrl = URL.createObjectURL(blob);
+    audio = new Audio(blobUrl);
+    audio.preservesPitch = true;
+    audio.mozPreservesPitch = true;
+    audio.webkitPreservesPitch = true;
+    audio.playbackRate = playbackRate;
+    try {
+      await new Promise((resolve, reject) => {
+        if (audio.readyState >= 3) return resolve();
+        audio.addEventListener('canplaythrough', resolve, { once: true });
+        audio.addEventListener('error', reject, { once: true });
+        audio.load();
+      });
+    } catch (err) { console.error('Load failed:', err); URL.revokeObjectURL(blobUrl); return; }
+    source = audioCtx.createMediaElementSource(audio);
+    source.connect(an);
+    sourceType = 'media';
+    start = () => audio.play().catch(() => {});
+  }
   an.connect(audioCtx.destination);
 
   const half = document.querySelector(`.half[data-lang="${lang}"]`);
@@ -503,18 +524,23 @@ async function playAudioWithMeter(blob, lang, playbackRate = 1) {
     half.classList.remove('playing');
     bars.forEach(b => b.style.height = '8%');
     try { source.disconnect(); an.disconnect(); } catch (e) {}
-    if (activePlayback && activePlayback.source === source) activePlayback = null;
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+    if (activePlayback && activePlayback.cleanup === cleanup) activePlayback = null;
   };
-  source.onended = cleanup;
+  if (sourceType === 'buf') source.onended = cleanup;
+  else { audio.onended = cleanup; audio.onerror = cleanup; }
 
-  activePlayback = { source, cleanup };
-  source.start(0);
+  activePlayback = { sourceType, source, audio, cleanup };
+  start();
   tick();
 }
 
 function stopPlayback() {
   if (activePlayback) {
-    try { activePlayback.source.stop(); } catch (e) {}
+    try {
+      if (activePlayback.sourceType === 'buf') activePlayback.source.stop();
+      else if (activePlayback.audio) activePlayback.audio.pause();
+    } catch (e) {}
     activePlayback.cleanup && activePlayback.cleanup();
     activePlayback = null;
   }
