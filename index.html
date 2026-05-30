@@ -17,7 +17,8 @@
   .half.it.recording { background: #ffd9c9; }
   .half.processing { opacity: 0.7; }
   @keyframes pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.25); } }
-  .label { font-size: clamp(40px, 7vw, 72px); font-weight: 700; letter-spacing: -2px; }
+  .label-row { display: flex; align-items: center; gap: 20px; }
+  .label { font-size: clamp(40px, 7vw, 72px); font-weight: 700; letter-spacing: -2px; line-height: 1; }
   .status { font-size: 14px; opacity: 0.6; margin-top: 6px; min-height: 20px; display: inline-flex; align-items: center; gap: 8px; }
   .result { margin-top: 28px; max-width: 720px; text-align: center; width: 100%; }
   .result .source { opacity: 0.5; font-size: 15px; margin-bottom: 10px; font-style: italic; }
@@ -44,10 +45,10 @@
   .skeleton .line.short { width: 60%; }
   @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
 
-  /* live audio meter while recording OR while playing back — anchored to the right edge */
-  .meter { display: none; position: absolute; right: 28px; top: 50%; transform: translateY(-50%); align-items: flex-end; gap: 5px; height: 96px; }
-  .half.recording .meter, .half.playing .meter { display: flex; }
-  .meter i { display: block; width: 6px; height: 8%; background: currentColor; border-radius: 3px; opacity: 0.85; transition: height 60ms linear; }
+  /* live audio meter sits next to the language label; dim when idle, full when recording/playing */
+  .meter { display: flex; align-items: flex-end; gap: 5px; height: 52px; opacity: 0.18; transition: opacity 0.2s; }
+  .half.recording .meter, .half.playing .meter { opacity: 1; }
+  .meter i { display: block; width: 6px; height: 8%; background: currentColor; border-radius: 3px; transition: height 60ms linear; }
 
   /* replay button next to source / translated text */
   .result .source, .result .translated { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
@@ -72,16 +73,20 @@
 </div>
 
 <div class="half de" data-lang="de" data-target="it">
-  <div class="label">Deutsch</div>
+  <div class="label-row">
+    <div class="label">Deutsch</div>
+    <div class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  </div>
   <div class="status"><span class="status-text">Klick zum Sprechen</span><span class="dots"><i></i><i></i><i></i></span></div>
-  <div class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
   <div class="result" id="result-de"></div>
 </div>
 
 <div class="half it" data-lang="it" data-target="de">
-  <div class="label">Italiano</div>
+  <div class="label-row">
+    <div class="label">Italiano</div>
+    <div class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  </div>
   <div class="status"><span class="status-text">Clicca per parlare</span><span class="dots"><i></i><i></i><i></i></span></div>
-  <div class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
   <div class="result" id="result-it"></div>
 </div>
 
