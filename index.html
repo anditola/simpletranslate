@@ -91,6 +91,10 @@
   .overlay-reset { background: none; border: 1px solid #3a3733; color: inherit; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; opacity: 0.7; font-family: inherit; }
   .overlay-reset:hover:not(:disabled) { opacity: 1; background: rgba(224,122,122,0.12); border-color: #e07a7a; color: #e07a7a; }
   .overlay-reset:disabled { opacity: 0.25; cursor: not-allowed; }
+  .history-footer { padding: 14px 0 4px; display: flex; gap: 18px; justify-content: center; border-top: 1px solid #3a3733; margin-top: 10px; }
+  .link-btn { background: none; border: none; color: inherit; opacity: 0.5; cursor: pointer; font-size: 12px; font-family: inherit; padding: 4px 8px; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  .link-btn:hover:not(:disabled) { opacity: 1; }
+  .link-btn:disabled { opacity: 0.25; cursor: not-allowed; text-decoration: none; }
   .history-empty { padding: 28px 12px; text-align: center; opacity: 0.5; font-size: 14px; }
   #historyTotal { font-size: 12px; opacity: 0.55; font-weight: 400; font-family: ui-monospace, SFMono-Regular, monospace; margin-left: 6px; letter-spacing: 0.2px; }
 
@@ -224,7 +228,14 @@
         <button class="overlay-close" id="historyClose" aria-label="Schließen">×</button>
       </div>
     </div>
-    <div class="overlay-body" id="historyList"></div>
+    <div class="overlay-body">
+      <div id="historyList"></div>
+      <div class="history-footer">
+        <button class="link-btn" id="historyExport">Exportieren (JSON)</button>
+        <button class="link-btn" id="historyImport">Importieren</button>
+        <input type="file" id="historyImportFile" accept="application/json,.json" hidden>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -829,6 +840,75 @@ async function clearHistoryAll() {
 dbLoadHistory().then(entries => { history.push(...entries); });
 document.getElementById('historyReset').onclick = clearHistoryAll;
 
+// --- Export / Import ---
+function blobToBase64(blob) {
+  return new Promise(resolve => {
+    if (!blob) return resolve(null);
+    const r = new FileReader();
+    r.onload = () => resolve({ type: blob.type, data: r.result.split(',')[1] });
+    r.onerror = () => resolve(null);
+    r.readAsDataURL(blob);
+  });
+}
+function base64ToBlob(o) {
+  if (!o || !o.data) return null;
+  try {
+    const binary = atob(o.data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: o.type || 'application/octet-stream' });
+  } catch (e) { return null; }
+}
+
+async function exportHistory() {
+  if (!history.length) return;
+  const entries = await Promise.all(history.map(async h => ({
+    sourceLang: h.sourceLang, targetLang: h.targetLang,
+    sourceText: h.sourceText, translatedText: h.translatedText,
+    sourceBlob: await blobToBase64(h.sourceBlob),
+    ttsBlob: await blobToBase64(h.ttsBlob),
+    cost: h.cost, timestamp: h.timestamp || null
+  })));
+  const payload = { app: 'simpletranslate', version: 1, exportedAt: Date.now(), entries };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `simpletranslate-history-${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function importHistory(file) {
+  let parsed;
+  try { parsed = JSON.parse(await file.text()); }
+  catch { alert('Konnte JSON nicht parsen.'); return; }
+  if (!parsed || !Array.isArray(parsed.entries)) { alert('Datei enthält keine Verlaufseinträge.'); return; }
+  if (!confirm(`${parsed.entries.length} Einträge importieren? (werden an den bestehenden Verlauf angehängt)`)) return;
+  for (const e of parsed.entries) {
+    const entry = {
+      sourceLang: e.sourceLang, targetLang: e.targetLang,
+      sourceText: e.sourceText || '', translatedText: e.translatedText || '',
+      sourceBlob: base64ToBlob(e.sourceBlob),
+      ttsBlob: base64ToBlob(e.ttsBlob),
+      cost: e.cost || null
+    };
+    history.push(entry);
+    await dbSaveHistory(entry);
+  }
+  renderHistory();
+}
+
+document.getElementById('historyExport').onclick = exportHistory;
+document.getElementById('historyImport').onclick = () => document.getElementById('historyImportFile').click();
+document.getElementById('historyImportFile').onchange = e => {
+  const f = e.target.files[0];
+  if (f) importHistory(f);
+  e.target.value = '';
+};
+
 const historyOverlay = document.getElementById('historyOverlay');
 function openHistory() { renderHistory(); historyOverlay.classList.remove('hidden'); }
 function closeHistory() { historyOverlay.classList.add('hidden'); }
@@ -845,7 +925,9 @@ function renderHistory() {
   const list = document.getElementById('historyList');
   const totalEl = document.getElementById('historyTotal');
   const resetBtn = document.getElementById('historyReset');
+  const exportBtn = document.getElementById('historyExport');
   resetBtn.disabled = history.length === 0;
+  exportBtn.disabled = history.length === 0;
   if (history.length === 0) {
     list.innerHTML = '<div class="history-empty">Noch nichts übersetzt.</div>';
     totalEl.textContent = '';
