@@ -93,8 +93,6 @@
     .status { font-size: 13px; margin-top: 4px; }
     .result { margin-top: 18px; }
     .result .source { font-size: 14px; margin-bottom: 6px; }
-    #keyBar span { display: none; }
-    #keyBar { padding: 6px 8px; }
     .topbar { top: 6px; right: 8px; gap: 4px; }
     .topbar button { width: 34px; height: 34px; }
     .topbar button svg { width: 18px; height: 18px; }
@@ -107,18 +105,31 @@
     .meter { height: 36px; }
     .result { margin-top: 10px; }
   }
-  #keyBar { position: fixed; top: 0; left: 0; right: 0; padding: 8px 12px; background: rgba(0,0,0,0.92); color: #fff; font-size: 12px; display: flex; gap: 8px; align-items: center; z-index: 20; }
-  #keyBar input { flex: 1; padding: 6px 10px; background: #1c1c1c; color: #fff; border: 1px solid #333; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 12px; }
-  #keyBar.hidden { display: none; }
-  #keyBar button { background: #2a7; color: #fff; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
+  /* form styles used inside the key overlay */
+  .overlay-info { font-size: 13px; opacity: 0.65; margin: 4px 0 14px; line-height: 1.45; }
+  .overlay-body input[type="password"] { width: 100%; padding: 11px 13px; background: #2a2724; color: #fff; border: 1px solid #3a3733; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; box-sizing: border-box; }
+  .overlay-body input[type="password"]:focus { outline: none; border-color: #4ab38a; }
+  .overlay-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .overlay-actions .primary { background: #2a7; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; }
+  .overlay-actions .primary:hover { background: #38a577; }
 </style>
 </head>
 <body>
 
-<div id="keyBar" class="hidden">
-  <span>OpenAI API Key:</span>
-  <input type="password" id="keyInput" placeholder="sk-...">
-  <button id="keySave">Speichern</button>
+<div id="keyOverlay" class="overlay hidden">
+  <div class="overlay-card">
+    <div class="overlay-head">
+      <h2>OpenAI API Key</h2>
+      <button class="overlay-close" id="keyClose" aria-label="Schließen">×</button>
+    </div>
+    <div class="overlay-body">
+      <p class="overlay-info">Wird nur in deinem Browser gespeichert (localStorage) und direkt an OpenAI gesendet — landet nie auf einem Server.</p>
+      <input type="password" id="keyInput" placeholder="sk-...">
+      <div class="overlay-actions">
+        <button id="keySave" class="primary">Speichern</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="half de" data-lang="de" data-target="it">
@@ -180,25 +191,25 @@ let lastSourceBlob = null, lastTtsBlob = null;
 let activePlayback = null;
 const history = []; // newest at end, max 5
 
-const keyBar = document.getElementById('keyBar');
+const keyOverlay = document.getElementById('keyOverlay');
 const keyInput = document.getElementById('keyInput');
-document.getElementById('gear').onclick = () => {
-  keyInput.value = apiKey;
-  keyBar.classList.toggle('hidden');
-  if (!keyBar.classList.contains('hidden')) keyInput.focus();
-};
+function openKey() { keyInput.value = apiKey; keyOverlay.classList.remove('hidden'); setTimeout(() => keyInput.focus(), 0); }
+function closeKey() { keyOverlay.classList.add('hidden'); }
+document.getElementById('gear').onclick = openKey;
+document.getElementById('keyClose').onclick = closeKey;
 document.getElementById('keySave').onclick = saveKey;
+keyOverlay.addEventListener('click', e => { if (e.target === keyOverlay) closeKey(); });
 keyInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
 function saveKey() {
   apiKey = keyInput.value.trim();
   localStorage.setItem('openai_key', apiKey);
-  keyBar.classList.add('hidden');
+  closeKey();
 }
-if (!apiKey) keyBar.classList.remove('hidden');
+if (!apiKey) openKey();
 
 document.querySelectorAll('.half').forEach(el => {
   el.addEventListener('click', e => {
-    if (e.target.closest('#keyBar') || e.target.closest('.topbar') || e.target.closest('.icon-btn')) return;
+    if (e.target.closest('.overlay') || e.target.closest('.topbar') || e.target.closest('.icon-btn')) return;
     const lang = el.dataset.lang;
     const target = el.dataset.target;
     if (mediaRecorder && mediaRecorder.state === 'recording') {
@@ -359,7 +370,7 @@ function stopPlayback() {
 }
 
 async function startRecording(lang, target) {
-  if (!apiKey) { keyBar.classList.remove('hidden'); keyInput.focus(); return; }
+  if (!apiKey) { openKey(); return; }
   try {
     stopPlayback();
     clearResult(lang);
@@ -531,7 +542,11 @@ function closeHistory() { historyOverlay.classList.add('hidden'); }
 document.getElementById('historyBtn').onclick = openHistory;
 document.getElementById('historyClose').onclick = closeHistory;
 historyOverlay.addEventListener('click', e => { if (e.target === historyOverlay) closeHistory(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && !historyOverlay.classList.contains('hidden')) closeHistory(); });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (!historyOverlay.classList.contains('hidden')) closeHistory();
+  if (!keyOverlay.classList.contains('hidden')) closeKey();
+});
 
 function renderHistory() {
   const list = document.getElementById('historyList');
