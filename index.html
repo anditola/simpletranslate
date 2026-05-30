@@ -57,6 +57,7 @@
   .icon-btn:active { transform: scale(0.92); opacity: 1; }
   .icon-btn svg { width: 22px; height: 22px; }
   .icon-btn.copied { opacity: 1; }
+  .icon-btn.slow { font-family: ui-monospace, SFMono-Regular, monospace; font-weight: 700; font-size: 11px; letter-spacing: 0; }
 
   /* top-right toolbar (history + key) — always on the dark half, so explicit white */
   .topbar { position: fixed; top: 10px; right: 12px; display: flex; gap: 6px; z-index: 15; }
@@ -107,13 +108,37 @@
     .meter { height: 36px; }
     .result { margin-top: 10px; }
   }
-  /* form styles used inside the key overlay */
+  /* form styles used inside the settings overlay */
   .overlay-info { font-size: 13px; opacity: 0.65; margin: 4px 0 14px; line-height: 1.45; }
-  .overlay-body input[type="password"] { width: 100%; padding: 11px 13px; background: #1e1c1a; color: #f0ece6; border: 1px solid #3a3733; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; box-sizing: border-box; }
-  .overlay-body input[type="password"]:focus { outline: none; border-color: #4ab38a; }
-  .overlay-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .overlay-body input[type="password"], .overlay-body select, .overlay-body input[type="number"] {
+    width: 100%; padding: 11px 13px; background: #1e1c1a; color: #f0ece6;
+    border: 1px solid #3a3733; border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; box-sizing: border-box;
+  }
+  .overlay-body select { font-family: inherit; -webkit-appearance: none; appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23f0ece6'><path d='M7 10l5 5 5-5z'/></svg>");
+    background-repeat: no-repeat; background-position: right 10px center; background-size: 16px; padding-right: 32px; }
+  .overlay-body input:focus, .overlay-body select:focus { outline: none; border-color: #4ab38a; }
+  .overlay-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
   .overlay-actions .primary { background: #2a7; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; }
   .overlay-actions .primary:hover { background: #38a577; }
+
+  /* settings rows */
+  .settings-row { margin-top: 14px; }
+  .settings-row label { display: block; font-size: 12px; opacity: 0.6; margin-bottom: 6px; letter-spacing: 0.4px; text-transform: uppercase; font-weight: 600; }
+  .settings-row.inline { display: flex; align-items: center; gap: 10px; }
+  .settings-row.inline label { margin: 0; text-transform: none; letter-spacing: 0; font-size: 13px; opacity: 0.85; font-weight: 400; flex: 1; }
+  .settings-row input[type="range"] { width: 100%; accent-color: #4ab38a; }
+  .settings-row .row-flex { display: flex; align-items: center; gap: 12px; }
+  .settings-row .row-flex input[type="range"] { flex: 1; }
+  .settings-row .value { font-family: ui-monospace, monospace; font-size: 13px; opacity: 0.7; min-width: 42px; text-align: right; }
+  /* iOS-style toggle */
+  .toggle { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle .slider { position: absolute; inset: 0; background: #3a3733; border-radius: 999px; transition: background 0.15s; cursor: pointer; }
+  .toggle .slider::before { content: ''; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; background: #f0ece6; border-radius: 50%; transition: transform 0.15s; }
+  .toggle input:checked + .slider { background: #2a7; }
+  .toggle input:checked + .slider::before { transform: translateX(18px); }
 </style>
 </head>
 <body>
@@ -121,12 +146,37 @@
 <div id="keyOverlay" class="overlay hidden">
   <div class="overlay-card">
     <div class="overlay-head">
-      <h2>OpenAI API Key</h2>
+      <h2>Einstellungen</h2>
       <button class="overlay-close" id="keyClose" aria-label="Schließen">×</button>
     </div>
     <div class="overlay-body">
-      <p class="overlay-info">Wird nur in deinem Browser gespeichert (localStorage) und direkt an OpenAI gesendet — landet nie auf einem Server.</p>
-      <input type="password" id="keyInput" placeholder="sk-...">
+      <div class="settings-row">
+        <label for="keyInput">OpenAI API Key</label>
+        <input type="password" id="keyInput" placeholder="sk-...">
+        <p class="overlay-info" style="margin: 8px 0 0;">Nur lokal im Browser. Wird direkt an OpenAI gesendet.</p>
+      </div>
+      <div class="settings-row">
+        <label for="voiceSelect">Stimme</label>
+        <select id="voiceSelect"></select>
+      </div>
+      <div class="settings-row">
+        <label>Tempo</label>
+        <div class="row-flex">
+          <input type="range" id="speedSlider" min="0.7" max="1.3" step="0.05">
+          <span class="value" id="speedValue">1.00×</span>
+        </div>
+      </div>
+      <div class="settings-row inline">
+        <label for="vadToggle">Auto-Stopp bei Sprechpause</label>
+        <span class="toggle"><input type="checkbox" id="vadToggle"><span class="slider"></span></span>
+      </div>
+      <div class="settings-row" id="vadMsRow">
+        <label>Stillschweige-Dauer bis Auto-Stopp</label>
+        <div class="row-flex">
+          <input type="range" id="vadMsSlider" min="500" max="3000" step="100">
+          <span class="value" id="vadMsValue">1500 ms</span>
+        </div>
+      </div>
       <div class="overlay-actions">
         <button id="keySave" class="primary">Speichern</button>
       </div>
@@ -204,6 +254,20 @@ const STATUS = {
 };
 
 let apiKey = localStorage.getItem('openai_key') || '';
+
+const VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'];
+const settings = {
+  voice: localStorage.getItem('voice') || 'nova',
+  ttsSpeed: parseFloat(localStorage.getItem('ttsSpeed') || '1') || 1,
+  vadEnabled: localStorage.getItem('vadEnabled') !== 'false',
+  vadSilenceMs: parseInt(localStorage.getItem('vadSilenceMs') || '1500', 10) || 1500
+};
+function saveSettings() {
+  localStorage.setItem('voice', settings.voice);
+  localStorage.setItem('ttsSpeed', String(settings.ttsSpeed));
+  localStorage.setItem('vadEnabled', String(settings.vadEnabled));
+  localStorage.setItem('vadSilenceMs', String(settings.vadSilenceMs));
+}
 let mediaRecorder = null;
 let audioChunks = [];
 let recordingLang = null;
@@ -217,16 +281,51 @@ const history = []; // newest at end, max 5
 
 const keyOverlay = document.getElementById('keyOverlay');
 const keyInput = document.getElementById('keyInput');
-function openKey() { keyInput.value = apiKey; keyOverlay.classList.remove('hidden'); setTimeout(() => keyInput.focus(), 0); }
+const voiceSelect = document.getElementById('voiceSelect');
+const speedSlider = document.getElementById('speedSlider');
+const speedValue = document.getElementById('speedValue');
+const vadToggle = document.getElementById('vadToggle');
+const vadMsSlider = document.getElementById('vadMsSlider');
+const vadMsValue = document.getElementById('vadMsValue');
+const vadMsRow = document.getElementById('vadMsRow');
+
+// populate voices once
+voiceSelect.innerHTML = VOICES.map(v => `<option value="${v}">${v}</option>`).join('');
+
+function fillSettingsForm() {
+  keyInput.value = apiKey;
+  voiceSelect.value = settings.voice;
+  speedSlider.value = settings.ttsSpeed;
+  speedValue.textContent = Number(settings.ttsSpeed).toFixed(2) + '×';
+  vadToggle.checked = settings.vadEnabled;
+  vadMsSlider.value = settings.vadSilenceMs;
+  vadMsValue.textContent = settings.vadSilenceMs + ' ms';
+  vadMsRow.style.opacity = settings.vadEnabled ? '1' : '0.4';
+  vadMsRow.style.pointerEvents = settings.vadEnabled ? '' : 'none';
+}
+speedSlider.addEventListener('input', e => { speedValue.textContent = Number(e.target.value).toFixed(2) + '×'; });
+vadMsSlider.addEventListener('input', e => { vadMsValue.textContent = e.target.value + ' ms'; });
+vadToggle.addEventListener('change', e => {
+  vadMsRow.style.opacity = e.target.checked ? '1' : '0.4';
+  vadMsRow.style.pointerEvents = e.target.checked ? '' : 'none';
+});
+
+function openKey() { fillSettingsForm(); keyOverlay.classList.remove('hidden'); setTimeout(() => keyInput.focus(), 0); }
 function closeKey() { keyOverlay.classList.add('hidden'); }
 document.getElementById('gear').onclick = openKey;
 document.getElementById('keyClose').onclick = closeKey;
-document.getElementById('keySave').onclick = saveKey;
+document.getElementById('keySave').onclick = saveAll;
 keyOverlay.addEventListener('click', e => { if (e.target === keyOverlay) closeKey(); });
-keyInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
-function saveKey() {
+keyInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveAll(); });
+
+function saveAll() {
   apiKey = keyInput.value.trim();
   localStorage.setItem('openai_key', apiKey);
+  settings.voice = voiceSelect.value;
+  settings.ttsSpeed = parseFloat(speedSlider.value);
+  settings.vadEnabled = vadToggle.checked;
+  settings.vadSilenceMs = parseInt(vadMsSlider.value, 10);
+  saveSettings();
   closeKey();
 }
 if (!apiKey) openKey();
@@ -256,6 +355,17 @@ document.addEventListener('click', e => {
   playAudioWithMeter(blob, lang);
 });
 
+// Main UI slow-replay buttons (data-slow="tts")
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.slow');
+  if (!btn || btn.closest('#historyOverlay')) return;
+  e.stopPropagation();
+  const blob = btn.dataset.slow === 'source' ? lastSourceBlob : lastTtsBlob;
+  if (!blob) return;
+  const lang = btn.closest('.half').dataset.lang;
+  playAudioWithMeter(blob, lang, 0.7);
+});
+
 // Main UI copy button (next to translation)
 document.addEventListener('click', e => {
   const btn = e.target.closest('.copy');
@@ -277,6 +387,7 @@ document.addEventListener('click', e => {
   const action = btn.dataset.hAction;
   if      (action === 'src'  && h.sourceBlob) playAudioWithMeter(h.sourceBlob, h.sourceLang);
   else if (action === 'tts'  && h.ttsBlob)    playAudioWithMeter(h.ttsBlob,    h.targetLang);
+  else if (action === 'slow' && h.ttsBlob)    playAudioWithMeter(h.ttsBlob,    h.targetLang, 0.7);
   else if (action === 'copy')                 copyToClipboard(btn, h.translatedText);
 });
 
@@ -304,14 +415,29 @@ function startMeter(stream, lang) {
   const bars = document.querySelectorAll(`.half[data-lang="${lang}"] .meter i`);
   const N = bars.length;
   const binSize = Math.max(1, Math.floor(data.length / N));
+  // VAD state — must have spoken first (overall amplitude above threshold), then
+  // sustained silence longer than settings.vadSilenceMs triggers stopRecording.
+  const VAD_THRESHOLD = 18;          // 0–255 avg
+  let vadSpoke = false;
+  let vadLastVoiceAt = performance.now();
   function tick() {
     analyser.getByteFrequencyData(data);
+    let overall = 0;
     for (let i = 0; i < N; i++) {
       let sum = 0;
       for (let j = 0; j < binSize; j++) sum += data[i * binSize + j] || 0;
       const avg = sum / binSize;
-      const pct = Math.min(100, 8 + (avg / 255) * 130);
-      bars[i].style.height = pct + '%';
+      bars[i].style.height = Math.min(100, 8 + (avg / 255) * 130) + '%';
+      overall += avg;
+    }
+    overall /= N;
+    const now = performance.now();
+    if (overall > VAD_THRESHOLD) {
+      vadSpoke = true;
+      vadLastVoiceAt = now;
+    } else if (settings.vadEnabled && vadSpoke && (now - vadLastVoiceAt) > settings.vadSilenceMs) {
+      stopRecording();
+      return; // don't schedule another frame
     }
     meterRaf = requestAnimationFrame(tick);
   }
@@ -325,7 +451,7 @@ function stopMeter(lang) {
   document.querySelectorAll(sel).forEach(b => b.style.height = '8%');
 }
 
-async function playAudioWithMeter(blob, lang) {
+async function playAudioWithMeter(blob, lang, playbackRate = 1) {
   stopPlayback();
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -344,6 +470,7 @@ async function playAudioWithMeter(blob, lang) {
 
   const source = audioCtx.createBufferSource();
   source.buffer = audioBuffer;
+  source.playbackRate.value = playbackRate;
   const an = audioCtx.createAnalyser();
   an.fftSize = 64;
   an.smoothingTimeConstant = 0.6;
@@ -497,7 +624,7 @@ async function processAudio(blob, sourceLang, targetLang, audioSec) {
     });
 
     document.getElementById('result-' + targetLang).innerHTML =
-      `<div class="translated"><span>${esc(translatedText)}</span>${replayBtn('tts')}${copyBtn()}</div>`;
+      `<div class="translated"><span>${esc(translatedText)}</span>${replayBtn('tts')}${slowBtn('tts')}${copyBtn()}</div>`;
     setStatus(sourceLang, 'idle');
     document.querySelector(`.half[data-lang="${sourceLang}"]`).classList.remove('processing');
     busy = false;
@@ -528,9 +655,10 @@ async function speak(text, lang) {
       headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'gpt-4o-mini-tts',
-        voice: 'nova',
+        voice: settings.voice,
         input: text,
         response_format: 'mp3',
+        speed: settings.ttsSpeed,
         instructions: `Speak the given text in ${LANG_NAMES[lang]} with natural, native pronunciation. The text is in ${LANG_NAMES[lang]} — do not switch language.`
       })
     });
@@ -547,6 +675,10 @@ async function speak(text, lang) {
 
 function replayBtn(which) {
   return `<button class="icon-btn replay" data-replay="${which}" title="Nochmal anhören" aria-label="Nochmal anhören">${SVG.speaker}</button>`;
+}
+
+function slowBtn(which) {
+  return `<button class="icon-btn slow" data-slow="${which}" title="Langsam abspielen (0.7×)" aria-label="Langsam abspielen">0.7×</button>`;
 }
 
 function copyBtn() {
@@ -573,7 +705,66 @@ async function copyToClipboard(btn, text) {
 function recordHistory(entry) {
   history.push(entry);
   if (history.length > 5) history.shift();
+  dbSaveHistory(entry);
 }
+
+// --- IndexedDB persistence (blobs survive reload) ---
+const DB_NAME = 'simpletranslate';
+const DB_STORE = 'history';
+let dbPromise = null;
+function getDB() {
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(DB_STORE)) {
+          db.createObjectStore(DB_STORE, { keyPath: 'id', autoIncrement: true });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  return dbPromise;
+}
+async function dbLoadHistory() {
+  try {
+    const db = await getDB();
+    return await new Promise(resolve => {
+      const tx = db.transaction(DB_STORE, 'readonly');
+      const req = tx.objectStore(DB_STORE).getAll();
+      req.onsuccess = () => {
+        const all = (req.result || []).sort((a, b) => a.id - b.id);
+        resolve(all.slice(-5));
+      };
+      req.onerror = () => resolve([]);
+    });
+  } catch (e) { console.error('IDB load failed', e); return []; }
+}
+async function dbSaveHistory(entry) {
+  try {
+    const db = await getDB();
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    const store = tx.objectStore(DB_STORE);
+    store.add({
+      sourceLang: entry.sourceLang, targetLang: entry.targetLang,
+      sourceText: entry.sourceText, translatedText: entry.translatedText,
+      sourceBlob: entry.sourceBlob, ttsBlob: entry.ttsBlob,
+      cost: entry.cost, timestamp: Date.now()
+    });
+    const all = await new Promise(resolve => {
+      const r = store.getAll();
+      r.onsuccess = () => resolve(r.result || []);
+    });
+    if (all.length > 5) {
+      const sorted = all.sort((a, b) => a.id - b.id);
+      sorted.slice(0, sorted.length - 5).forEach(e => store.delete(e.id));
+    }
+  } catch (e) { console.error('IDB save failed', e); }
+}
+// Restore previous session's history on load
+dbLoadHistory().then(entries => { history.push(...entries); });
 
 const historyOverlay = document.getElementById('historyOverlay');
 function openHistory() { renderHistory(); historyOverlay.classList.remove('hidden'); }
@@ -614,6 +805,7 @@ function renderHistory() {
       <div class="actions">
         <button class="icon-btn" data-h-action="src" data-h-idx="${idx}" title="Aufnahme anhören">${SVG.mic}</button>
         <button class="icon-btn" data-h-action="tts" data-h-idx="${idx}" title="Übersetzung anhören">${SVG.speaker}</button>
+        <button class="icon-btn slow" data-h-action="slow" data-h-idx="${idx}" title="Übersetzung langsam (0.7×)">0.7×</button>
         <button class="icon-btn copy" data-h-action="copy" data-h-idx="${idx}" title="Übersetzung kopieren">${SVG.copy}</button>
         ${costHtml}
       </div>
