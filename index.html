@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Translate</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  .half { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, filter 0.15s; padding: 24px; user-select: none; }
+  .half.de { background: #111; color: #fff; }
+  .half.it { background: #f4f1ec; color: #111; }
+  .half:hover { filter: brightness(1.08); }
+  .half.recording { animation: pulse 1.1s ease-in-out infinite; }
+  .half.de.recording { background: #5a1a1a; }
+  .half.it.recording { background: #ffd9c9; }
+  .half.processing { opacity: 0.7; }
+  @keyframes pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.25); } }
+  .label { font-size: clamp(40px, 7vw, 72px); font-weight: 700; letter-spacing: -2px; }
+  .status { font-size: 14px; opacity: 0.55; margin-top: 6px; min-height: 20px; }
+  .result { margin-top: 28px; max-width: 720px; text-align: center; }
+  .result .source { opacity: 0.5; font-size: 15px; margin-bottom: 10px; font-style: italic; }
+  .result .translated { font-size: clamp(20px, 2.4vw, 28px); line-height: 1.35; font-weight: 500; }
+  #keyBar { position: fixed; top: 0; left: 0; right: 0; padding: 8px 12px; background: rgba(0,0,0,0.92); color: #fff; font-size: 12px; display: flex; gap: 8px; align-items: center; z-index: 20; }
+  #keyBar input { flex: 1; padding: 6px 10px; background: #1c1c1c; color: #fff; border: 1px solid #333; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 12px; }
+  #keyBar.hidden { display: none; }
+  #keyBar button { background: #2a7; color: #fff; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
+  .gear { position: fixed; top: 10px; right: 12px; opacity: 0.35; cursor: pointer; z-index: 15; background: none; border: none; color: inherit; font-size: 18px; padding: 4px 8px; }
+  .gear:hover { opacity: 0.8; }
+</style>
+</head>
+<body>
+
+<div id="keyBar" class="hidden">
+  <span>OpenAI API Key:</span>
+  <input type="password" id="keyInput" placeholder="sk-...">
+  <button id="keySave">Speichern</button>
+</div>
+
+<div class="half de" data-lang="de" data-target="it">
+  <div class="label">Deutsch</div>
+  <div class="status">Klick zum Sprechen</div>
+  <div class="result" id="result-de"></div>
+</div>
+
+<div class="half it" data-lang="it" data-target="de">
+  <div class="label">Italiano</div>
+  <div class="status">Clicca per parlare</div>
+  <div class="result" id="result-it"></div>
+</div>
+
+<button class="gear" id="gear" title="API Key">⚙</button>
+
+<script>
+const LANG_NAMES = { de: 'German', it: 'Italian' };
+const STATUS = {
+  de: { idle: 'Klick zum Sprechen', recording: '● Aufnahme läuft — Klick zum Stoppen', processing: 'Übersetze…' },
+  it: { idle: 'Clicca per parlare',  recording: '● Registrazione — clicca per fermare', processing: 'Traduco…' }
+};
+
+let apiKey = localStorage.getItem('openai_key') || '';
+let mediaRecorder = null;
+let audioChunks = [];
+let recordingLang = null;
+let busy = false;
+let micStream = null;
+
+const keyBar = document.getElementById('keyBar');
+const keyInput = document.getElementById('keyInput');
+document.getElementById('gear').onclick = () => {
+  keyInput.value = apiKey;
+  keyBar.classList.toggle('hidden');
+  if (!keyBar.classList.contains('hidden')) keyInput.focus();
+};
+document.getElementById('keySave').onclick = saveKey;
+keyInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
+function saveKey() {
+  apiKey = keyInput.value.trim();
+  localStorage.setItem('openai_key', apiKey);
+  keyBar.classList.add('hidden');
+}
+if (!apiKey) keyBar.classList.remove('hidden');
+
+document.querySelectorAll('.half').forEach(el => {
+  el.addEventListener('click', e => {
+    if (e.target.closest('#keyBar') || e.target.closest('.gear')) return;
+    const lang = el.dataset.lang;
+    const target = el.dataset.target;
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      if (recordingLang === lang) stopRecording();
+      return;
+    }
+    if (busy) return;
+    startRecording(lang, target);
+  });
+});
+
+async function ensureMicStream() {
+  if (micStream && micStream.active && micStream.getAudioTracks().some(t => t.readyState === 'live')) {
+    return micStream;
+  }
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  return micStream;
+}
+
+async function startRecording(lang, target) {
+  if (!apiKey) { keyBar.classList.remove('hidden'); keyInput.focus(); return; }
+  try {
+    const stream = await ensureMicStream();
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
+    recordingLang = lang;
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      processAudio(blob, lang, target);
+    };
+    mediaRecorder.start();
+    setStatus(lang, 'recording');
+    document.querySelector(`.half[data-lang="${lang}"]`).classList.add('recording');
+  } catch (err) {
+    micStream = null;
+    alert('Mikrofon-Zugriff verweigert: ' + err.message);
+    setStatus(lang, 'idle');
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    const lang = recordingLang;
+    mediaRecorder.stop();
+    document.querySelector(`.half[data-lang="${lang}"]`).classList.remove('recording');
+    document.querySelector(`.half[data-lang="${lang}"]`).classList.add('processing');
+    setStatus(lang, 'processing');
+  }
+}
+
+function setStatus(lang, key) {
+  document.querySelector(`.half[data-lang="${lang}"] .status`).textContent = STATUS[lang][key];
+}
+
+async function processAudio(blob, sourceLang, targetLang) {
+  busy = true;
+  try {
+    // 1. STT
+    const fd = new FormData();
+    const ext = (blob.type.includes('mp4') || blob.type.includes('mp4a')) ? 'mp4' : 'webm';
+    fd.append('file', blob, 'audio.' + ext);
+    fd.append('model', 'gpt-4o-mini-transcribe');
+    fd.append('language', sourceLang);
+    const tRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey },
+      body: fd
+    });
+    if (!tRes.ok) throw new Error('STT: ' + await tRes.text());
+    const { text: sourceText } = await tRes.json();
+    if (!sourceText || !sourceText.trim()) throw new Error('Keine Sprache erkannt');
+
+    // 2. GPT translation
+    const trRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: `You translate from ${LANG_NAMES[sourceLang]} to ${LANG_NAMES[targetLang]}. Output ONLY the translation. No quotes, no explanation, no source text.` },
+          { role: 'user', content: sourceText }
+        ]
+      })
+    });
+    if (!trRes.ok) throw new Error('GPT: ' + await trRes.text());
+    const trJson = await trRes.json();
+    const translatedText = trJson.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
+
+    showResult(sourceLang, targetLang, sourceText, translatedText);
+    setStatus(sourceLang, 'idle');
+    document.querySelector(`.half[data-lang="${sourceLang}"]`).classList.remove('processing');
+    busy = false;
+
+    // 3. TTS — fire-and-forget so user can already start the next recording
+    speak(translatedText);
+  } catch (err) {
+    console.error(err);
+    alert('Fehler: ' + err.message);
+    setStatus(sourceLang, 'idle');
+    document.querySelector(`.half[data-lang="${sourceLang}"]`).classList.remove('processing');
+    busy = false;
+  }
+}
+
+async function speak(text) {
+  try {
+    const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'tts-1', voice: 'nova', input: text, response_format: 'mp3' })
+    });
+    if (!ttsRes.ok) throw new Error('TTS: ' + await ttsRes.text());
+    const audioBlob = await ttsRes.blob();
+    const audio = new Audio(URL.createObjectURL(audioBlob));
+    audio.play().catch(() => {});
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function showResult(sourceLang, targetLang, sourceText, translatedText) {
+  document.getElementById('result-' + sourceLang).innerHTML =
+    `<div class="source">${esc(sourceText)}</div>`;
+  document.getElementById('result-' + targetLang).innerHTML =
+    `<div class="translated">${esc(translatedText)}</div>`;
+}
+
+function esc(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+</script>
+</body>
+</html>
