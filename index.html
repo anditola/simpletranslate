@@ -18,10 +18,31 @@
   .half.processing { opacity: 0.7; }
   @keyframes pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.25); } }
   .label { font-size: clamp(40px, 7vw, 72px); font-weight: 700; letter-spacing: -2px; }
-  .status { font-size: 14px; opacity: 0.55; margin-top: 6px; min-height: 20px; }
-  .result { margin-top: 28px; max-width: 720px; text-align: center; }
+  .status { font-size: 14px; opacity: 0.6; margin-top: 6px; min-height: 20px; display: inline-flex; align-items: center; gap: 8px; }
+  .result { margin-top: 28px; max-width: 720px; text-align: center; width: 100%; }
   .result .source { opacity: 0.5; font-size: 15px; margin-bottom: 10px; font-style: italic; }
   .result .translated { font-size: clamp(20px, 2.4vw, 28px); line-height: 1.35; font-weight: 500; }
+
+  /* typing dots */
+  .dots { display: none; gap: 4px; align-items: center; }
+  .half.processing .dots { display: inline-flex; }
+  .dots i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.35; animation: dot-bounce 1.2s ease-in-out infinite; }
+  .dots i:nth-child(2) { animation-delay: 0.15s; }
+  .dots i:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes dot-bounce {
+    0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
+    40%           { opacity: 1;   transform: translateY(-4px); }
+  }
+
+  /* shimmer skeleton for the target side while waiting for translation */
+  .skeleton { display: flex; flex-direction: column; gap: 12px; align-items: center; margin: 0 auto; max-width: 560px; }
+  .skeleton .line { height: 22px; width: 100%; border-radius: 6px;
+    background: linear-gradient(90deg, rgba(127,127,127,0.10) 0%, rgba(127,127,127,0.28) 50%, rgba(127,127,127,0.10) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  .skeleton .line.short { width: 60%; }
+  @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
   #keyBar { position: fixed; top: 0; left: 0; right: 0; padding: 8px 12px; background: rgba(0,0,0,0.92); color: #fff; font-size: 12px; display: flex; gap: 8px; align-items: center; z-index: 20; }
   #keyBar input { flex: 1; padding: 6px 10px; background: #1c1c1c; color: #fff; border: 1px solid #333; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 12px; }
   #keyBar.hidden { display: none; }
@@ -40,13 +61,13 @@
 
 <div class="half de" data-lang="de" data-target="it">
   <div class="label">Deutsch</div>
-  <div class="status">Klick zum Sprechen</div>
+  <div class="status"><span class="status-text">Klick zum Sprechen</span><span class="dots"><i></i><i></i><i></i></span></div>
   <div class="result" id="result-de"></div>
 </div>
 
 <div class="half it" data-lang="it" data-target="de">
   <div class="label">Italiano</div>
-  <div class="status">Clicca per parlare</div>
+  <div class="status"><span class="status-text">Clicca per parlare</span><span class="dots"><i></i><i></i><i></i></span></div>
   <div class="result" id="result-it"></div>
 </div>
 
@@ -55,8 +76,8 @@
 <script>
 const LANG_NAMES = { de: 'German', it: 'Italian' };
 const STATUS = {
-  de: { idle: 'Klick zum Sprechen', recording: '● Aufnahme läuft — Klick zum Stoppen', processing: 'Übersetze…' },
-  it: { idle: 'Clicca per parlare',  recording: '● Registrazione — clicca per fermare', processing: 'Traduco…' }
+  de: { idle: 'Klick zum Sprechen', recording: '● Aufnahme läuft — Klick zum Stoppen', transcribing: 'Höre zu', translating: 'Übersetze' },
+  it: { idle: 'Clicca per parlare',  recording: '● Registrazione — clicca per fermare', transcribing: 'Ascolto',   translating: 'Traduco' }
 };
 
 let apiKey = localStorage.getItem('openai_key') || '';
@@ -107,6 +128,8 @@ async function ensureMicStream() {
 async function startRecording(lang, target) {
   if (!apiKey) { keyBar.classList.remove('hidden'); keyInput.focus(); return; }
   try {
+    clearResult(lang);
+    clearResult(target);
     const stream = await ensureMicStream();
     mediaRecorder = new MediaRecorder(stream);
     audioChunks = [];
@@ -129,15 +152,27 @@ async function startRecording(lang, target) {
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state === 'recording') {
     const lang = recordingLang;
+    const half = document.querySelector(`.half[data-lang="${lang}"]`);
+    const target = half.dataset.target;
     mediaRecorder.stop();
-    document.querySelector(`.half[data-lang="${lang}"]`).classList.remove('recording');
-    document.querySelector(`.half[data-lang="${lang}"]`).classList.add('processing');
-    setStatus(lang, 'processing');
+    half.classList.remove('recording');
+    half.classList.add('processing');
+    setStatus(lang, 'transcribing');
+    showSkeleton(target);
   }
 }
 
 function setStatus(lang, key) {
-  document.querySelector(`.half[data-lang="${lang}"] .status`).textContent = STATUS[lang][key];
+  document.querySelector(`.half[data-lang="${lang}"] .status-text`).textContent = STATUS[lang][key];
+}
+
+function showSkeleton(lang) {
+  document.getElementById('result-' + lang).innerHTML =
+    '<div class="skeleton"><div class="line"></div><div class="line short"></div></div>';
+}
+
+function clearResult(lang) {
+  document.getElementById('result-' + lang).innerHTML = '';
 }
 
 async function processAudio(blob, sourceLang, targetLang) {
@@ -158,6 +193,11 @@ async function processAudio(blob, sourceLang, targetLang) {
     const { text: sourceText } = await tRes.json();
     if (!sourceText || !sourceText.trim()) throw new Error('Keine Sprache erkannt');
 
+    // Progressive reveal: show transcribed source immediately, flip status to "translating"
+    document.getElementById('result-' + sourceLang).innerHTML =
+      `<div class="source">${esc(sourceText)}</div>`;
+    setStatus(sourceLang, 'translating');
+
     // 2. GPT translation
     const trRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -175,7 +215,8 @@ async function processAudio(blob, sourceLang, targetLang) {
     const trJson = await trRes.json();
     const translatedText = trJson.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
 
-    showResult(sourceLang, targetLang, sourceText, translatedText);
+    document.getElementById('result-' + targetLang).innerHTML =
+      `<div class="translated">${esc(translatedText)}</div>`;
     setStatus(sourceLang, 'idle');
     document.querySelector(`.half[data-lang="${sourceLang}"]`).classList.remove('processing');
     busy = false;
@@ -187,6 +228,7 @@ async function processAudio(blob, sourceLang, targetLang) {
     alert('Fehler: ' + err.message);
     setStatus(sourceLang, 'idle');
     document.querySelector(`.half[data-lang="${sourceLang}"]`).classList.remove('processing');
+    clearResult(targetLang);
     busy = false;
   }
 }
@@ -205,13 +247,6 @@ async function speak(text) {
   } catch (err) {
     console.error(err);
   }
-}
-
-function showResult(sourceLang, targetLang, sourceText, translatedText) {
-  document.getElementById('result-' + sourceLang).innerHTML =
-    `<div class="source">${esc(sourceText)}</div>`;
-  document.getElementById('result-' + targetLang).innerHTML =
-    `<div class="translated">${esc(translatedText)}</div>`;
 }
 
 function esc(s) {
