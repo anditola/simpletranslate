@@ -43,6 +43,18 @@
   }
   .skeleton .line.short { width: 60%; }
   @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+
+  /* live audio meter while recording */
+  .meter { display: none; align-items: flex-end; justify-content: center; gap: 5px; height: 56px; margin-top: 18px; }
+  .half.recording .meter { display: flex; }
+  .meter i { display: block; width: 6px; height: 8%; background: currentColor; border-radius: 3px; opacity: 0.85; transition: height 60ms linear; }
+
+  /* replay button next to source / translated text */
+  .result .source, .result .translated { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+  .replay { background: none; border: 1.5px solid currentColor; border-radius: 999px; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: inherit; opacity: 0.35; transition: opacity 0.15s, transform 0.1s; padding: 0; flex-shrink: 0; }
+  .replay:hover { opacity: 1; }
+  .replay:active { transform: scale(0.92); }
+  .replay svg { width: 14px; height: 14px; }
   #keyBar { position: fixed; top: 0; left: 0; right: 0; padding: 8px 12px; background: rgba(0,0,0,0.92); color: #fff; font-size: 12px; display: flex; gap: 8px; align-items: center; z-index: 20; }
   #keyBar input { flex: 1; padding: 6px 10px; background: #1c1c1c; color: #fff; border: 1px solid #333; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 12px; }
   #keyBar.hidden { display: none; }
@@ -62,12 +74,14 @@
 <div class="half de" data-lang="de" data-target="it">
   <div class="label">Deutsch</div>
   <div class="status"><span class="status-text">Klick zum Sprechen</span><span class="dots"><i></i><i></i><i></i></span></div>
+  <div class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
   <div class="result" id="result-de"></div>
 </div>
 
 <div class="half it" data-lang="it" data-target="de">
   <div class="label">Italiano</div>
   <div class="status"><span class="status-text">Clicca per parlare</span><span class="dots"><i></i><i></i><i></i></span></div>
+  <div class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
   <div class="result" id="result-it"></div>
 </div>
 
@@ -86,6 +100,8 @@ let audioChunks = [];
 let recordingLang = null;
 let busy = false;
 let micStream = null;
+let audioCtx = null, analyser = null, meterSource = null, meterStream = null, meterRaf = null;
+let lastSourceUrl = null, lastTtsUrl = null;
 
 const keyBar = document.getElementById('keyBar');
 const keyInput = document.getElementById('keyInput');
@@ -105,7 +121,7 @@ if (!apiKey) keyBar.classList.remove('hidden');
 
 document.querySelectorAll('.half').forEach(el => {
   el.addEventListener('click', e => {
-    if (e.target.closest('#keyBar') || e.target.closest('.gear')) return;
+    if (e.target.closest('#keyBar') || e.target.closest('.gear') || e.target.closest('.replay')) return;
     const lang = el.dataset.lang;
     const target = el.dataset.target;
     if (mediaRecorder && mediaRecorder.state === 'recording') {
@@ -117,12 +133,57 @@ document.querySelectorAll('.half').forEach(el => {
   });
 });
 
+// Replay button click delegation
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.replay');
+  if (!btn) return;
+  e.stopPropagation();
+  const url = btn.dataset.replay === 'source' ? lastSourceUrl : lastTtsUrl;
+  if (url) new Audio(url).play().catch(() => {});
+});
+
 async function ensureMicStream() {
   if (micStream && micStream.active && micStream.getAudioTracks().some(t => t.readyState === 'live')) {
     return micStream;
   }
   micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   return micStream;
+}
+
+function startMeter(stream, lang) {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (meterStream !== stream) {
+    if (meterSource) { try { meterSource.disconnect(); } catch (e) {} }
+    meterSource = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 64;
+    analyser.smoothingTimeConstant = 0.6;
+    meterSource.connect(analyser);
+    meterStream = stream;
+  }
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  const bars = document.querySelectorAll(`.half[data-lang="${lang}"] .meter i`);
+  const N = bars.length;
+  const binSize = Math.max(1, Math.floor(data.length / N));
+  function tick() {
+    analyser.getByteFrequencyData(data);
+    for (let i = 0; i < N; i++) {
+      let sum = 0;
+      for (let j = 0; j < binSize; j++) sum += data[i * binSize + j] || 0;
+      const avg = sum / binSize;
+      const pct = Math.min(100, 8 + (avg / 255) * 130);
+      bars[i].style.height = pct + '%';
+    }
+    meterRaf = requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function stopMeter() {
+  if (meterRaf) cancelAnimationFrame(meterRaf);
+  meterRaf = null;
+  document.querySelectorAll('.meter i').forEach(b => b.style.height = '8%');
 }
 
 async function startRecording(lang, target) {
@@ -142,6 +203,7 @@ async function startRecording(lang, target) {
     mediaRecorder.start();
     setStatus(lang, 'recording');
     document.querySelector(`.half[data-lang="${lang}"]`).classList.add('recording');
+    startMeter(stream, lang);
   } catch (err) {
     micStream = null;
     alert('Mikrofon-Zugriff verweigert: ' + err.message);
@@ -155,6 +217,7 @@ function stopRecording() {
     const half = document.querySelector(`.half[data-lang="${lang}"]`);
     const target = half.dataset.target;
     mediaRecorder.stop();
+    stopMeter();
     half.classList.remove('recording');
     half.classList.add('processing');
     setStatus(lang, 'transcribing');
@@ -177,6 +240,8 @@ function clearResult(lang) {
 
 async function processAudio(blob, sourceLang, targetLang) {
   busy = true;
+  if (lastSourceUrl) URL.revokeObjectURL(lastSourceUrl);
+  lastSourceUrl = URL.createObjectURL(blob);
   try {
     // 1. STT
     const fd = new FormData();
@@ -195,7 +260,7 @@ async function processAudio(blob, sourceLang, targetLang) {
 
     // Progressive reveal: show transcribed source immediately, flip status to "translating"
     document.getElementById('result-' + sourceLang).innerHTML =
-      `<div class="source">${esc(sourceText)}</div>`;
+      `<div class="source"><span>${esc(sourceText)}</span>${replayBtn('source')}</div>`;
     setStatus(sourceLang, 'translating');
 
     // 2. GPT translation
@@ -216,7 +281,7 @@ async function processAudio(blob, sourceLang, targetLang) {
     const translatedText = trJson.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
 
     document.getElementById('result-' + targetLang).innerHTML =
-      `<div class="translated">${esc(translatedText)}</div>`;
+      `<div class="translated"><span>${esc(translatedText)}</span>${replayBtn('tts')}</div>`;
     setStatus(sourceLang, 'idle');
     document.querySelector(`.half[data-lang="${sourceLang}"]`).classList.remove('processing');
     busy = false;
@@ -242,11 +307,16 @@ async function speak(text) {
     });
     if (!ttsRes.ok) throw new Error('TTS: ' + await ttsRes.text());
     const audioBlob = await ttsRes.blob();
-    const audio = new Audio(URL.createObjectURL(audioBlob));
-    audio.play().catch(() => {});
+    if (lastTtsUrl) URL.revokeObjectURL(lastTtsUrl);
+    lastTtsUrl = URL.createObjectURL(audioBlob);
+    new Audio(lastTtsUrl).play().catch(() => {});
   } catch (err) {
     console.error(err);
   }
+}
+
+function replayBtn(which) {
+  return `<button class="replay" data-replay="${which}" title="Nochmal anhören" aria-label="Nochmal anhören"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4.03v8.06A4.5 4.5 0 0 0 16.5 12zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4-.91 7-4.49 7-8.77s-3-7.86-7-8.77z"/></svg></button>`;
 }
 
 function esc(s) {
