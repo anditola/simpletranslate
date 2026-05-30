@@ -81,7 +81,9 @@
   .history-item .actions { display: flex; gap: 8px; align-items: center; }
   .history-item .icon-btn { width: 34px; height: 34px; border-width: 1px; }
   .history-item .icon-btn svg { width: 16px; height: 16px; }
+  .history-item .cost { margin-left: auto; font-size: 11px; opacity: 0.55; font-family: ui-monospace, SFMono-Regular, monospace; cursor: help; letter-spacing: 0.2px; }
   .history-empty { padding: 28px 12px; text-align: center; opacity: 0.5; font-size: 14px; }
+  #historyTotal { font-size: 12px; opacity: 0.55; font-weight: 400; font-family: ui-monospace, SFMono-Regular, monospace; margin-left: 6px; letter-spacing: 0.2px; }
 
   /* mobile / narrow screens */
   @media (max-width: 560px) {
@@ -158,7 +160,7 @@
 <div id="historyOverlay" class="overlay hidden">
   <div class="overlay-card">
     <div class="overlay-head">
-      <h2>Verlauf</h2>
+      <h2>Verlauf <span id="historyTotal"></span></h2>
       <button class="overlay-close" id="historyClose" aria-label="Schließen">×</button>
     </div>
     <div class="overlay-body" id="historyList"></div>
@@ -175,6 +177,27 @@ const SVG = {
 };
 
 const LANG_NAMES = { de: 'German', it: 'Italian' };
+
+// Rough USD pricing — sanity-check against OpenAI's pricing page if numbers look off.
+const PRICING = {
+  sttPerSec:        0.003 / 60,    // gpt-4o-mini-transcribe ~$0.003/min
+  gptInputPerToken: 0.150 / 1e6,   // gpt-4o-mini $0.150 / 1M input tokens
+  gptOutputPerToken:0.600 / 1e6,   // gpt-4o-mini $0.600 / 1M output tokens
+  ttsPerChar:       0.600 / 1e6,   // gpt-4o-mini-tts text input ~$0.60 / 1M
+};
+
+function calcCost(parts) {
+  const stt = (parts.audioSec || 0) * PRICING.sttPerSec;
+  const gptIn  = (parts.promptTokens || 0) * PRICING.gptInputPerToken;
+  const gptOut = (parts.completionTokens || 0) * PRICING.gptOutputPerToken;
+  const tts = (parts.ttsChars || 0) * PRICING.ttsPerChar;
+  return { stt, gpt: gptIn + gptOut, tts, total: stt + gptIn + gptOut + tts };
+}
+
+function fmt$(n) {
+  if (n < 0.0001) return '<$0.0001';
+  return '$' + n.toFixed(4);
+}
 const STATUS = {
   de: { idle: 'Klick zum Sprechen', recording: '● Aufnahme läuft — Klick zum Stoppen', transcribing: 'Höre zu', translating: 'Übersetze' },
   it: { idle: 'Clicca per parlare',  recording: '● Registrazione — clicca per fermare', transcribing: 'Ascolto',   translating: 'Traduco' }
@@ -184,6 +207,7 @@ let apiKey = localStorage.getItem('openai_key') || '';
 let mediaRecorder = null;
 let audioChunks = [];
 let recordingLang = null;
+let recordingStartedAt = 0;
 let busy = false;
 let micStream = null;
 let audioCtx = null, analyser = null, meterSource = null, meterStream = null, meterRaf = null;
@@ -381,10 +405,12 @@ async function startRecording(lang, target) {
     recordingLang = lang;
     mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
     mediaRecorder.onstop = () => {
+      const audioSec = (performance.now() - recordingStartedAt) / 1000;
       const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-      processAudio(blob, lang, target);
+      processAudio(blob, lang, target, audioSec);
     };
     mediaRecorder.start();
+    recordingStartedAt = performance.now();
     setStatus(lang, 'recording');
     document.querySelector(`.half[data-lang="${lang}"]`).classList.add('recording');
     startMeter(stream, lang);
@@ -422,7 +448,7 @@ function clearResult(lang) {
   document.getElementById('result-' + lang).innerHTML = '';
 }
 
-async function processAudio(blob, sourceLang, targetLang) {
+async function processAudio(blob, sourceLang, targetLang, audioSec) {
   busy = true;
   lastSourceBlob = blob;
   try {
@@ -462,6 +488,13 @@ async function processAudio(blob, sourceLang, targetLang) {
     if (!trRes.ok) throw new Error('GPT: ' + await trRes.text());
     const trJson = await trRes.json();
     const translatedText = trJson.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
+    const usage = trJson.usage || {};
+    const cost = calcCost({
+      audioSec,
+      promptTokens: usage.prompt_tokens || 0,
+      completionTokens: usage.completion_tokens || 0,
+      ttsChars: translatedText.length
+    });
 
     document.getElementById('result-' + targetLang).innerHTML =
       `<div class="translated"><span>${esc(translatedText)}</span>${replayBtn('tts')}${copyBtn()}</div>`;
@@ -475,7 +508,7 @@ async function processAudio(blob, sourceLang, targetLang) {
     ttsPromise.then(ttsBlob => {
       if (ttsBlob) recordHistory({
         sourceLang, targetLang, sourceText, translatedText,
-        sourceBlob: blob, ttsBlob
+        sourceBlob: blob, ttsBlob, cost
       });
     });
   } catch (err) {
@@ -556,13 +589,24 @@ document.addEventListener('keydown', e => {
 
 function renderHistory() {
   const list = document.getElementById('historyList');
+  const totalEl = document.getElementById('historyTotal');
   if (history.length === 0) {
     list.innerHTML = '<div class="history-empty">Noch nichts übersetzt.</div>';
+    totalEl.textContent = '';
     return;
   }
+  const total = history.reduce((s, h) => s + (h.cost?.total || 0), 0);
+  totalEl.textContent = '≈ ' + fmt$(total);
   // newest first
   list.innerHTML = history.slice().reverse().map((h, i) => {
     const idx = history.length - 1 - i;
+    const c = h.cost;
+    const costTitle = c
+      ? `STT ${fmt$(c.stt)} · GPT ${fmt$(c.gpt)} · TTS ${fmt$(c.tts)}`
+      : '';
+    const costHtml = c
+      ? `<span class="cost" title="${costTitle}">≈ ${fmt$(c.total)}</span>`
+      : '';
     return `<div class="history-item" data-idx="${idx}">
       <div class="dir">${h.sourceLang.toUpperCase()} → ${h.targetLang.toUpperCase()}</div>
       <div class="src">${esc(h.sourceText)}</div>
@@ -571,6 +615,7 @@ function renderHistory() {
         <button class="icon-btn" data-h-action="src" data-h-idx="${idx}" title="Aufnahme anhören">${SVG.mic}</button>
         <button class="icon-btn" data-h-action="tts" data-h-idx="${idx}" title="Übersetzung anhören">${SVG.speaker}</button>
         <button class="icon-btn copy" data-h-action="copy" data-h-idx="${idx}" title="Übersetzung kopieren">${SVG.copy}</button>
+        ${costHtml}
       </div>
     </div>`;
   }).join('');
