@@ -481,18 +481,19 @@ async function playAudioWithMeter(blob, lang, playbackRate = 1) {
     // like a different speaker.
     blobUrl = URL.createObjectURL(blob);
     audio = new Audio(blobUrl);
-    audio.preservesPitch = true;
-    audio.mozPreservesPitch = true;
-    audio.webkitPreservesPitch = true;
-    audio.playbackRate = playbackRate;
+    audio.preload = 'auto';
     try {
       await new Promise((resolve, reject) => {
         if (audio.readyState >= 3) return resolve();
         audio.addEventListener('canplaythrough', resolve, { once: true });
         audio.addEventListener('error', reject, { once: true });
-        audio.load();
       });
     } catch (err) { console.error('Load failed:', err); URL.revokeObjectURL(blobUrl); return; }
+    // Set rate + pitch flags AFTER load — load() / src change resets playbackRate.
+    audio.preservesPitch = true;
+    audio.mozPreservesPitch = true;
+    audio.webkitPreservesPitch = true;
+    audio.playbackRate = playbackRate;
     source = audioCtx.createMediaElementSource(audio);
     source.connect(an);
     sourceType = 'media';
