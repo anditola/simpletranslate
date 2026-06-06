@@ -210,6 +210,10 @@
           <span class="value" id="vadMsValue">1500 ms</span>
         </div>
       </div>
+      <div class="settings-row inline">
+        <label for="realtimeToggle">Realtime-API (schneller, teurer)</label>
+        <span class="toggle"><input type="checkbox" id="realtimeToggle"><span class="slider"></span></span>
+      </div>
       <div class="overlay-actions">
         <button id="keySave" class="primary">Speichern</button>
       </div>
@@ -280,6 +284,12 @@ const PRICING = {
   gptInputPerToken: 0.150 / 1e6,   // gpt-4o-mini $0.150 / 1M input tokens
   gptOutputPerToken:0.600 / 1e6,   // gpt-4o-mini $0.600 / 1M output tokens
   ttsPerChar:       0.600 / 1e6,   // gpt-4o-mini-tts text input ~$0.60 / 1M
+
+  // Realtime (gpt-4o-realtime / gpt-realtime). Audio tokens are pricier.
+  rtTextInputPerToken:   5.00  / 1e6,   // ~$5 / 1M text input
+  rtTextOutputPerToken:  20.00 / 1e6,   // ~$20 / 1M text output
+  rtAudioInputPerToken:  40.00 / 1e6,   // ~$40 / 1M audio input
+  rtAudioOutputPerToken: 80.00 / 1e6,   // ~$80 / 1M audio output
 };
 
 function calcCost(parts) {
@@ -288,6 +298,27 @@ function calcCost(parts) {
   const gptOut = (parts.completionTokens || 0) * PRICING.gptOutputPerToken;
   const tts = (parts.ttsChars || 0) * PRICING.ttsPerChar;
   return { stt, gpt: gptIn + gptOut, tts, total: stt + gptIn + gptOut + tts };
+}
+
+function calcRealtimeCost(usage) {
+  const u = usage || {};
+  // OpenAI Realtime usage shape: input_token_details / output_token_details
+  // with text_tokens + audio_tokens. Fall back to flat counts if missing.
+  const inTextTok  = u.input_token_details?.text_tokens  ?? 0;
+  const inAudTok   = u.input_token_details?.audio_tokens ?? 0;
+  const outTextTok = u.output_token_details?.text_tokens  ?? 0;
+  const outAudTok  = u.output_token_details?.audio_tokens ?? 0;
+  const textIn  = inTextTok  * PRICING.rtTextInputPerToken;
+  const textOut = outTextTok * PRICING.rtTextOutputPerToken;
+  const audIn   = inAudTok   * PRICING.rtAudioInputPerToken;
+  const audOut  = outAudTok  * PRICING.rtAudioOutputPerToken;
+  // Map to existing breakdown layout for display.
+  return {
+    stt: audIn,                  // we'll label "audio in" as STT-equivalent
+    gpt: textIn + textOut,
+    tts: audOut,
+    total: textIn + textOut + audIn + audOut
+  };
 }
 
 function fmt$(n) {
@@ -306,13 +337,15 @@ const settings = {
   voice: localStorage.getItem('voice') || 'nova',
   ttsSpeed: parseFloat(localStorage.getItem('ttsSpeed') || '1') || 1,
   vadEnabled: localStorage.getItem('vadEnabled') !== 'false',
-  vadSilenceMs: parseInt(localStorage.getItem('vadSilenceMs') || '1500', 10) || 1500
+  vadSilenceMs: parseInt(localStorage.getItem('vadSilenceMs') || '1500', 10) || 1500,
+  realtimeEnabled: localStorage.getItem('realtimeEnabled') === 'true'
 };
 function saveSettings() {
   localStorage.setItem('voice', settings.voice);
   localStorage.setItem('ttsSpeed', String(settings.ttsSpeed));
   localStorage.setItem('vadEnabled', String(settings.vadEnabled));
   localStorage.setItem('vadSilenceMs', String(settings.vadSilenceMs));
+  localStorage.setItem('realtimeEnabled', String(settings.realtimeEnabled));
 }
 let mediaRecorder = null;
 let audioChunks = [];
@@ -334,6 +367,7 @@ const vadToggle = document.getElementById('vadToggle');
 const vadMsSlider = document.getElementById('vadMsSlider');
 const vadMsValue = document.getElementById('vadMsValue');
 const vadMsRow = document.getElementById('vadMsRow');
+const realtimeToggle = document.getElementById('realtimeToggle');
 
 // populate voices once
 voiceSelect.innerHTML = VOICES.map(v => `<option value="${v}">${v}</option>`).join('');
@@ -348,6 +382,7 @@ function fillSettingsForm() {
   vadMsValue.textContent = settings.vadSilenceMs + ' ms';
   vadMsRow.style.opacity = settings.vadEnabled ? '1' : '0.4';
   vadMsRow.style.pointerEvents = settings.vadEnabled ? '' : 'none';
+  realtimeToggle.checked = settings.realtimeEnabled;
 }
 speedSlider.addEventListener('input', e => { speedValue.textContent = Number(e.target.value).toFixed(2) + '×'; });
 vadMsSlider.addEventListener('input', e => { vadMsValue.textContent = e.target.value + ' ms'; });
@@ -371,6 +406,7 @@ function saveAll() {
   settings.ttsSpeed = parseFloat(speedSlider.value);
   settings.vadEnabled = vadToggle.checked;
   settings.vadSilenceMs = parseInt(vadMsSlider.value, 10);
+  settings.realtimeEnabled = realtimeToggle.checked;
   saveSettings();
   closeKey();
 }
@@ -443,6 +479,11 @@ document.querySelectorAll('.half').forEach(el => {
     if (e.target.closest('.overlay') || e.target.closest('.topbar') || e.target.closest('.icon-btn')) return;
     const lang = el.dataset.lang;
     const target = el.dataset.target;
+    // Realtime session active? Same lang = abort, other lang = ignore.
+    if (rtSession) {
+      if (rtSession.sourceLang === lang) cleanupRealtime();
+      return;
+    }
     if (mediaRecorder && mediaRecorder.state === 'recording') {
       if (recordingLang === lang) stopRecording();
       return;
@@ -666,6 +707,7 @@ async function startRecording(lang, target) {
     if (isOffline) return;
   }
   if (!apiKey) { openKey(); return; }
+  if (settings.realtimeEnabled) return startRealtimeSession(lang, target);
   try {
     stopPlayback();
     clearResult(lang);
@@ -818,6 +860,232 @@ async function speak(text, lang) {
     console.error(err);
     return null;
   }
+}
+
+// =========================
+//  Realtime (WebRTC) flow
+// =========================
+const REALTIME_MODEL = 'gpt-4o-realtime-preview-2024-12-17';
+let rtSession = null;
+
+function startRemoteMeter(stream, lang) {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createMediaStreamSource(stream);
+  const an = audioCtx.createAnalyser();
+  an.fftSize = 64;
+  an.smoothingTimeConstant = 0.6;
+  src.connect(an);
+  // NOTE: do not connect to destination — playback is handled by the
+  // <audio> element via srcObject; tapping the stream here only feeds
+  // the analyser for the meter.
+  const half = document.querySelector(`.half[data-lang="${lang}"]`);
+  half.classList.add('playing');
+  const bars = half.querySelectorAll('.meter i');
+  const N = bars.length;
+  const data = new Uint8Array(an.frequencyBinCount);
+  const binSize = Math.max(1, Math.floor(data.length / N));
+  let raf;
+  function tick() {
+    an.getByteFrequencyData(data);
+    for (let i = 0; i < N; i++) {
+      let sum = 0;
+      for (let j = 0; j < binSize; j++) sum += data[i * binSize + j] || 0;
+      bars[i].style.height = Math.min(100, 8 + (sum / binSize / 255) * 130) + '%';
+    }
+    raf = requestAnimationFrame(tick);
+  }
+  tick();
+  return () => {
+    if (raf) cancelAnimationFrame(raf);
+    half.classList.remove('playing');
+    bars.forEach(b => b.style.height = '8%');
+    try { src.disconnect(); an.disconnect(); } catch (e) {}
+  };
+}
+
+function cleanupRealtime() {
+  if (!rtSession) return;
+  const s = rtSession;
+  rtSession = null;
+  try { s.stopRemoteMeter && s.stopRemoteMeter(); } catch (e) {}
+  try { s.micRec && s.micRec.state === 'recording' && s.micRec.stop(); } catch (e) {}
+  try { s.ttsRec && s.ttsRec.state === 'recording' && s.ttsRec.stop(); } catch (e) {}
+  try { s.pc && s.pc.close(); } catch (e) {}
+  try { s.audioEl && (s.audioEl.srcObject = null); } catch (e) {}
+  stopMeter(s.sourceLang);
+  const sh = document.querySelector(`.half[data-lang="${s.sourceLang}"]`);
+  sh.classList.remove('recording');
+  sh.classList.remove('processing');
+  setStatus(s.sourceLang, 'idle');
+  busy = false;
+  recordingLang = null;
+}
+
+async function startRealtimeSession(sourceLang, targetLang) {
+  busy = true;
+  recordingLang = sourceLang;
+  clearResult(sourceLang);
+  clearResult(targetLang);
+  const sourceHalf = document.querySelector(`.half[data-lang="${sourceLang}"]`);
+  sourceHalf.classList.add('recording');
+  setStatus(sourceLang, 'recording');
+
+  let session;
+  try {
+    const r = await safeFetch('https://api.openai.com/v1/realtime/sessions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: REALTIME_MODEL,
+        voice: settings.voice,
+        modalities: ['audio', 'text'],
+        instructions: `You are a real-time translator. The user speaks in ${LANG_NAMES[sourceLang]}. Respond ONLY with the ${LANG_NAMES[targetLang]} translation as natural, native-sounding spoken audio. Do not echo the source. Do not explain. If unclear, stay silent.`,
+        input_audio_transcription: { model: 'whisper-1' },
+        turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: settings.vadSilenceMs }
+      })
+    });
+    if (!r.ok) throw new Error(await r.text());
+    session = await r.json();
+  } catch (err) {
+    console.error('Realtime session create failed', err);
+    alert('Realtime-Session konnte nicht gestartet werden.\n' + (err.message || ''));
+    rtSession = { sourceLang }; cleanupRealtime();
+    return;
+  }
+  const ephemeral = session.client_secret?.value;
+  if (!ephemeral) { rtSession = { sourceLang }; cleanupRealtime(); return; }
+
+  let stream;
+  try { stream = await ensureMicStream(); }
+  catch (err) { rtSession = { sourceLang }; cleanupRealtime(); return; }
+
+  const pc = new RTCPeerConnection();
+  pc.addTrack(stream.getAudioTracks()[0], stream);
+  startMeter(stream, sourceLang);
+  // Register resources early so cleanupRealtime can tear them down if
+  // SDP exchange or anything downstream fails.
+  rtSession = { pc, sourceLang, targetLang };
+
+  // Locally record the mic so we have a Source blob for history/replay.
+  const micChunks = [];
+  let micRec;
+  try {
+    micRec = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+    micRec.ondataavailable = e => { if (e.data.size > 0) micChunks.push(e.data); };
+    micRec.start();
+    rtSession.micRec = micRec;
+  } catch (e) { console.warn('mic recorder failed', e); }
+
+  // Receive remote audio: <audio> element handles speakers, MediaRecorder
+  // captures it as a blob for history, AnalyserNode drives the target-side meter.
+  const audioEl = new Audio();
+  audioEl.autoplay = true;
+  const ttsChunks = [];
+  let ttsRec, stopRemoteMeter;
+  pc.ontrack = (e) => {
+    const remoteStream = e.streams[0];
+    audioEl.srcObject = remoteStream;
+    try {
+      ttsRec = new MediaRecorder(remoteStream, { mimeType: 'audio/webm' });
+      ttsRec.ondataavailable = ev => { if (ev.data.size > 0) ttsChunks.push(ev.data); };
+      ttsRec.onstop = () => finalizeRealtime();
+      ttsRec.start();
+      rtSession.ttsRec = ttsRec;
+    } catch (err) { console.warn('tts recorder failed', err); }
+    try { stopRemoteMeter = startRemoteMeter(remoteStream, targetLang); rtSession.stopRemoteMeter = stopRemoteMeter; }
+    catch (err) { console.warn('remote meter failed', err); }
+  };
+
+  // Data channel for control & event messages
+  const dc = pc.createDataChannel('oai-events');
+  let sourceText = '';
+  let translatedText = '';
+  let usage = null;
+  let skeletonShown = false;
+  let finalized = false;
+
+  dc.onmessage = (e) => {
+    let evt; try { evt = JSON.parse(e.data); } catch { return; }
+    switch (evt.type) {
+      case 'input_audio_buffer.speech_stopped':
+        stopMeter(sourceLang);
+        sourceHalf.classList.remove('recording');
+        sourceHalf.classList.add('processing');
+        setStatus(sourceLang, 'transcribing');
+        if (!skeletonShown) { showSkeleton(targetLang); skeletonShown = true; }
+        try { if (micRec && micRec.state === 'recording') micRec.stop(); } catch (err) {}
+        break;
+      case 'conversation.item.input_audio_transcription.completed':
+        sourceText = evt.transcript || '';
+        document.getElementById('result-' + sourceLang).innerHTML =
+          `<div class="source"><span>${esc(sourceText)}</span></div>`;
+        setStatus(sourceLang, 'translating');
+        break;
+      case 'response.audio_transcript.delta':
+        translatedText += evt.delta || '';
+        document.getElementById('result-' + targetLang).innerHTML =
+          `<div class="translated"><span>${esc(translatedText)}</span></div>`;
+        break;
+      case 'response.audio_transcript.done':
+        translatedText = evt.transcript || translatedText;
+        document.getElementById('result-' + targetLang).innerHTML =
+          `<div class="translated"><span>${esc(translatedText)}</span></div>`;
+        break;
+      case 'response.done':
+        usage = evt.response?.usage || null;
+        // Let any in-flight audio buffer drain, then stop the TTS recorder.
+        setTimeout(() => {
+          try { if (ttsRec && ttsRec.state === 'recording') ttsRec.stop(); else finalizeRealtime(); }
+          catch (err) { finalizeRealtime(); }
+        }, 400);
+        break;
+      case 'error':
+        console.error('Realtime error event', evt);
+        alert('Realtime-Fehler: ' + (evt.error?.message || 'unbekannt'));
+        cleanupRealtime();
+        break;
+    }
+  };
+
+  function finalizeRealtime() {
+    if (finalized || !rtSession) return;
+    finalized = true;
+    const sourceBlob = micChunks.length ? new Blob(micChunks, { type: 'audio/webm' }) : null;
+    const ttsBlob = ttsChunks.length ? new Blob(ttsChunks, { type: 'audio/webm' }) : null;
+    if (sourceBlob) lastSourceBlob = sourceBlob;
+    if (ttsBlob) lastTtsBlob = ttsBlob;
+    document.getElementById('result-' + sourceLang).innerHTML =
+      `<div class="source"><span>${esc(sourceText)}</span>${sourceBlob ? replayBtn('source') : ''}</div>`;
+    document.getElementById('result-' + targetLang).innerHTML =
+      `<div class="translated"><span>${esc(translatedText)}</span><div class="actions">${ttsBlob ? replayBtn('tts') : ''}${ttsBlob ? slowBtn('tts') : ''}${copyBtn()}</div></div>`;
+    const cost = calcRealtimeCost(usage);
+    if (sourceText || translatedText) {
+      recordHistory({ sourceLang, targetLang, sourceText, translatedText, sourceBlob, ttsBlob, cost });
+    }
+    cleanupRealtime();
+  }
+
+  // SDP exchange
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const sdpResp = await safeFetch(`https://api.openai.com/v1/realtime?model=${REALTIME_MODEL}`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + ephemeral, 'Content-Type': 'application/sdp' },
+      body: offer.sdp
+    });
+    if (!sdpResp.ok) throw new Error(await sdpResp.text());
+    await pc.setRemoteDescription({ type: 'answer', sdp: await sdpResp.text() });
+  } catch (err) {
+    console.error('Realtime SDP failed', err);
+    alert('Realtime-Verbindung fehlgeschlagen: ' + (err.message || ''));
+    cleanupRealtime();
+    return;
+  }
+
+  // Final attachments — ontrack will add ttsRec & stopRemoteMeter as they're created.
+  Object.assign(rtSession, { dc, audioEl, finalize: finalizeRealtime });
 }
 
 function replayBtn(which) {
