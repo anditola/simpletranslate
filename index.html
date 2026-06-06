@@ -155,6 +155,7 @@
   .overlay-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
   .overlay-actions .primary { background: #2a7; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; }
   .overlay-actions .primary:hover { background: #38a577; }
+  .build-info { margin-top: 14px; padding-top: 12px; border-top: 1px solid #3a3733; font-size: 11px; opacity: 0.4; text-align: center; font-family: ui-monospace, SFMono-Regular, monospace; letter-spacing: 0.3px; }
 
   /* settings rows */
   .settings-row { margin-top: 14px; }
@@ -217,6 +218,7 @@
       <div class="overlay-actions">
         <button id="keySave" class="primary">Speichern</button>
       </div>
+      <div class="build-info" id="buildInfo"></div>
     </div>
   </div>
 </div>
@@ -411,6 +413,21 @@ function saveAll() {
   closeKey();
 }
 if (!apiKey) openKey();
+
+// Build/deploy timestamp from the HTML's Last-Modified header (GitHub Pages
+// sets this when it deploys the file). With the SW's stale-while-revalidate,
+// this reflects the cached version's deploy time and updates after the next
+// reload that catches a refreshed cache.
+try {
+  const lm = new Date(document.lastModified);
+  if (!isNaN(lm.getTime())) {
+    document.getElementById('buildInfo').textContent =
+      'Build · ' + lm.toLocaleString('de-DE', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+      });
+  }
+} catch (e) {}
 
 // Online/offline indicator — OpenAI calls die without internet.
 // Chrome DevTools "Offline" doesn't always fire the offline event again
