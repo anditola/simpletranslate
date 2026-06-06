@@ -865,7 +865,7 @@ async function speak(text, lang) {
 // =========================
 //  Realtime (WebRTC) flow
 // =========================
-const REALTIME_MODEL = 'gpt-4o-realtime-preview-2024-12-17';
+const REALTIME_MODEL = 'gpt-realtime';
 let rtSession = null;
 
 function startRemoteMeter(stream, lang) {
@@ -931,31 +931,9 @@ async function startRealtimeSession(sourceLang, targetLang) {
   sourceHalf.classList.add('recording');
   setStatus(sourceLang, 'recording');
 
-  let session;
-  try {
-    const r = await safeFetch('https://api.openai.com/v1/realtime/sessions', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: REALTIME_MODEL,
-        voice: settings.voice,
-        modalities: ['audio', 'text'],
-        instructions: `You are a real-time translator. The user speaks in ${LANG_NAMES[sourceLang]}. Respond ONLY with the ${LANG_NAMES[targetLang]} translation as natural, native-sounding spoken audio. Do not echo the source. Do not explain. If unclear, stay silent.`,
-        input_audio_transcription: { model: 'whisper-1' },
-        turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: settings.vadSilenceMs }
-      })
-    });
-    if (!r.ok) throw new Error(await r.text());
-    session = await r.json();
-  } catch (err) {
-    console.error('Realtime session create failed', err);
-    alert('Realtime-Session konnte nicht gestartet werden.\n' + (err.message || ''));
-    rtSession = { sourceLang }; cleanupRealtime();
-    return;
-  }
-  const ephemeral = session.client_secret?.value;
-  if (!ephemeral) { rtSession = { sourceLang }; cleanupRealtime(); return; }
-
+  // No separate session-create call: we exchange SDP directly using the
+  // user's own API key. Session parameters are sent over the data channel
+  // via a session.update event as soon as it opens.
   let stream;
   try { stream = await ensureMicStream(); }
   catch (err) { rtSession = { sourceLang }; cleanupRealtime(); return; }
@@ -1005,6 +983,18 @@ async function startRealtimeSession(sourceLang, targetLang) {
   let skeletonShown = false;
   let finalized = false;
 
+  dc.onopen = () => {
+    dc.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        modalities: ['audio', 'text'],
+        voice: settings.voice,
+        instructions: `You are a real-time translator. The user speaks in ${LANG_NAMES[sourceLang]}. Respond ONLY with the ${LANG_NAMES[targetLang]} translation as natural, native-sounding spoken audio. Do not echo the source. Do not explain. If unclear, stay silent.`,
+        input_audio_transcription: { model: 'whisper-1' },
+        turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: settings.vadSilenceMs }
+      }
+    }));
+  };
   dc.onmessage = (e) => {
     let evt; try { evt = JSON.parse(e.data); } catch { return; }
     switch (evt.type) {
@@ -1072,7 +1062,7 @@ async function startRealtimeSession(sourceLang, targetLang) {
     await pc.setLocalDescription(offer);
     const sdpResp = await safeFetch(`https://api.openai.com/v1/realtime?model=${REALTIME_MODEL}`, {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + ephemeral, 'Content-Type': 'application/sdp' },
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/sdp' },
       body: offer.sdp
     });
     if (!sdpResp.ok) throw new Error(await sdpResp.text());
