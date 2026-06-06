@@ -376,16 +376,33 @@ function saveAll() {
 }
 if (!apiKey) openKey();
 
-// Online/offline indicator — OpenAI calls die without internet
+// Online/offline indicator — OpenAI calls die without internet.
+// navigator.onLine isn't always immediately accurate after a SW-served reload,
+// so we also flip to offline whenever a fetch actually fails with a network error.
 const offlineBanner = document.getElementById('offlineBanner');
-function updateOnlineStatus() {
-  const offline = !navigator.onLine;
-  offlineBanner.classList.toggle('show', offline);
-  document.body.classList.toggle('offline', offline);
+let isOffline = !navigator.onLine;
+function setOffline(o) {
+  isOffline = o;
+  offlineBanner.classList.toggle('show', o);
+  document.body.classList.toggle('offline', o);
 }
-window.addEventListener('online', updateOnlineStatus);
-window.addEventListener('offline', updateOnlineStatus);
-updateOnlineStatus();
+window.addEventListener('online',  () => setOffline(false));
+window.addEventListener('offline', () => setOffline(true));
+window.addEventListener('pageshow', () => setOffline(!navigator.onLine));
+setOffline(isOffline);
+
+// Wraps fetch so any network-level failure (TypeError "Failed to fetch") flips
+// the app into the offline state immediately, even if navigator.onLine lies.
+async function safeFetch(input, init) {
+  try {
+    const res = await fetch(input, init);
+    if (isOffline) setOffline(false); // got a response — we're back
+    return res;
+  } catch (err) {
+    if (err instanceof TypeError) setOffline(true);
+    throw err;
+  }
+}
 
 // PWA service worker
 if ('serviceWorker' in navigator) {
@@ -613,7 +630,7 @@ function stopPlayback() {
 }
 
 async function startRecording(lang, target) {
-  if (!navigator.onLine) return;
+  if (isOffline) return;
   if (!apiKey) { openKey(); return; }
   try {
     stopPlayback();
@@ -678,7 +695,7 @@ async function processAudio(blob, sourceLang, targetLang, audioSec) {
     fd.append('file', blob, 'audio.' + ext);
     fd.append('model', 'gpt-4o-mini-transcribe');
     fd.append('language', sourceLang);
-    const tRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    const tRes = await safeFetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + apiKey },
       body: fd
@@ -693,7 +710,7 @@ async function processAudio(blob, sourceLang, targetLang, audioSec) {
     setStatus(sourceLang, 'translating');
 
     // 2. GPT translation
-    const trRes = await fetch('https://api.openai.com/v1/chat/completions', {
+    const trRes = await safeFetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -743,7 +760,7 @@ async function processAudio(blob, sourceLang, targetLang, audioSec) {
 
 async function speak(text, lang) {
   try {
-    const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+    const ttsRes = await safeFetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({
