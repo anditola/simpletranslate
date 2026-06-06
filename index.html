@@ -388,21 +388,25 @@ function setOffline(o) {
   offlineBanner.classList.toggle('show', o);
   document.body.classList.toggle('offline', o);
 }
-async function probeOnline() {
-  try {
-    const c = new AbortController();
-    const t = setTimeout(() => c.abort(), 2000);
-    // no-cors HEAD against api.openai.com: opaque success means the network
-    // reaches OpenAI; any network-level block (DevTools Offline, real outage)
-    // throws.
-    await fetch('https://api.openai.com/', {
-      method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal: c.signal
-    });
-    clearTimeout(t);
-    setOffline(false);
-  } catch {
-    setOffline(true);
-  }
+function probeOnline() {
+  return (async () => {
+    try {
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), 2000);
+      // no-cors HEAD against api.openai.com: opaque success means the network
+      // reaches OpenAI; any network-level block (DevTools Offline, real outage)
+      // throws.
+      await fetch('https://api.openai.com/', {
+        method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal: c.signal
+      });
+      clearTimeout(t);
+      setOffline(false);
+      return true;
+    } catch {
+      setOffline(true);
+      return false;
+    }
+  })();
 }
 window.addEventListener('online',  probeOnline);
 window.addEventListener('offline', () => setOffline(true));
@@ -410,7 +414,9 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') probeOnline();
 });
 setOffline(isOffline);
-probeOnline(); // verify reality on load — corrects a lying navigator.onLine
+// Initial probe — startRecording waits for this so the very first click
+// after a SW-served reload doesn't fire a recording into the void.
+let initialOnlineCheck = probeOnline();
 
 // Wraps fetch so any network-level failure (TypeError) flips the app to
 // offline immediately, even if navigator.onLine still lies.
@@ -652,6 +658,13 @@ function stopPlayback() {
 
 async function startRecording(lang, target) {
   if (isOffline) return;
+  // Wait for the initial connectivity probe so a too-fast click on a
+  // SW-served reload doesn't start a recording into the void.
+  if (initialOnlineCheck) {
+    await initialOnlineCheck;
+    initialOnlineCheck = null;
+    if (isOffline) return;
+  }
   if (!apiKey) { openKey(); return; }
   try {
     stopPlayback();
@@ -771,7 +784,10 @@ async function processAudio(blob, sourceLang, targetLang, audioSec) {
     });
   } catch (err) {
     console.error(err);
-    alert('Fehler: ' + err.message);
+    const isNetwork = (err instanceof TypeError) || /failed to fetch|networkerror/i.test(err.message || '');
+    alert(isNetwork
+      ? 'Offline — die Übersetzung konnte nicht abgeschlossen werden. Verbindung prüfen.'
+      : 'Fehler: ' + err.message);
     setStatus(sourceLang, 'idle');
     document.querySelector(`.half[data-lang="${sourceLang}"]`).classList.remove('processing');
     clearResult(targetLang);
