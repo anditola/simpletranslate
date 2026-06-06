@@ -479,9 +479,15 @@ document.querySelectorAll('.half').forEach(el => {
     if (e.target.closest('.overlay') || e.target.closest('.topbar') || e.target.closest('.icon-btn')) return;
     const lang = el.dataset.lang;
     const target = el.dataset.target;
-    // Realtime session active? Same lang = abort, other lang = ignore.
+    // Realtime session active?
+    //   first click on same half  = commit (stop recording, request translation)
+    //   second click on same half = abort (cancel the in-flight response)
+    //   click on other half       = ignore
     if (rtSession) {
-      if (rtSession.sourceLang === lang) cleanupRealtime();
+      if (rtSession.sourceLang === lang) {
+        if (rtSession.committed) cleanupRealtime();
+        else commitRealtime();
+      }
       return;
     }
     if (mediaRecorder && mediaRecorder.state === 'recording') {
@@ -904,6 +910,25 @@ function startRemoteMeter(stream, lang) {
   };
 }
 
+function commitRealtime() {
+  if (!rtSession || !rtSession.dc || rtSession.committed) return;
+  rtSession.committed = true;
+  try {
+    rtSession.dc.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+    rtSession.dc.send(JSON.stringify({ type: 'response.create' }));
+  } catch (e) { console.warn('commit failed', e); }
+  try { if (rtSession.micRec && rtSession.micRec.state === 'recording') rtSession.micRec.stop(); } catch (e) {}
+  stopMeter(rtSession.sourceLang);
+  const sh = document.querySelector(`.half[data-lang="${rtSession.sourceLang}"]`);
+  sh.classList.remove('recording');
+  sh.classList.add('processing');
+  setStatus(rtSession.sourceLang, 'transcribing');
+  if (!rtSession.skeletonShown) {
+    showSkeleton(rtSession.targetLang);
+    rtSession.skeletonShown = true;
+  }
+}
+
 function cleanupRealtime() {
   if (!rtSession) return;
   const s = rtSession;
@@ -994,7 +1019,10 @@ async function startRealtimeSession(sourceLang, targetLang) {
         audio: {
           input: {
             transcription: { model: 'gpt-4o-mini-transcribe' },
-            turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: settings.vadSilenceMs }
+            // Manual turn detection: server VAD would commit on short pauses
+            // (e.g. between numbers in a list) and cut off the rest. We commit
+            // explicitly when the user clicks the half again.
+            turn_detection: null
           },
           output: {
             voice: settings.voice
