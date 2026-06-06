@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Rounded square background in the app's petrol teal -->
+  <rect width="512" height="512" rx="96" ry="96" fill="#1a2a2f"/>
+
+  <!-- Back bubble: warm terracotta-cream, slightly bigger, bottom-right -->
+  <g>
+    <path d="M 162 200
+             h 240
+             a 50 50 0 0 1 50 50
+             v 130
+             a 50 50 0 0 1 -50 50
+             h -130
+             l -52 48
+             v -48
+             h -58
+             a 50 50 0 0 1 -50 -50
+             v -130
+             a 50 50 0 0 1 50 -50 z"
+          fill="#d9a574"/>
+  </g>
+
+  <!-- Front bubble: cream, top-left -->
+  <g>
+    <path d="M 60 90
+             h 240
+             a 50 50 0 0 1 50 50
+             v 130
+             a 50 50 0 0 1 -50 50
+             h -180
+             l -52 48
+             v -48
+             h -8
+             a 50 50 0 0 1 -50 -50
+             v -130
+             a 50 50 0 0 1 50 -50 z"
+          fill="#f4f1ec"/>
+  </g>
+</svg>
