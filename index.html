@@ -109,6 +109,13 @@
   .offline-banner.show { transform: translateY(0); }
   /* nudge the topbar down when banner is visible so it doesn't overlap */
   .offline-banner.show ~ .topbar { top: 48px; }
+
+  /* offline state: halves visually disabled, no hover lift, not-allowed cursor */
+  body.offline .half:not(.recording) { cursor: not-allowed; }
+  body.offline .half:not(.recording) .label,
+  body.offline .half:not(.recording) .status,
+  body.offline .half:not(.recording) .meter { opacity: 0.4; }
+  body.offline .half:not(.recording):hover { filter: none; }
   .history-empty { padding: 28px 12px; text-align: center; opacity: 0.5; font-size: 14px; }
   #historyTotal { font-size: 12px; opacity: 0.55; font-weight: 400; font-family: ui-monospace, SFMono-Regular, monospace; margin-left: 6px; letter-spacing: 0.2px; }
 
@@ -371,7 +378,11 @@ if (!apiKey) openKey();
 
 // Online/offline indicator — OpenAI calls die without internet
 const offlineBanner = document.getElementById('offlineBanner');
-function updateOnlineStatus() { offlineBanner.classList.toggle('show', !navigator.onLine); }
+function updateOnlineStatus() {
+  const offline = !navigator.onLine;
+  offlineBanner.classList.toggle('show', offline);
+  document.body.classList.toggle('offline', offline);
+}
 window.addEventListener('online', updateOnlineStatus);
 window.addEventListener('offline', updateOnlineStatus);
 updateOnlineStatus();
@@ -602,6 +613,7 @@ function stopPlayback() {
 }
 
 async function startRecording(lang, target) {
+  if (!navigator.onLine) return;
   if (!apiKey) { openKey(); return; }
   try {
     stopPlayback();
