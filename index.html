@@ -377,26 +377,47 @@ function saveAll() {
 if (!apiKey) openKey();
 
 // Online/offline indicator — OpenAI calls die without internet.
-// navigator.onLine isn't always immediately accurate after a SW-served reload,
-// so we also flip to offline whenever a fetch actually fails with a network error.
+// Chrome DevTools "Offline" doesn't always fire the offline event again
+// after a SW-served reload, and navigator.onLine starts at the physical
+// connection's state (usually true). So we actively probe on load.
 const offlineBanner = document.getElementById('offlineBanner');
 let isOffline = !navigator.onLine;
 function setOffline(o) {
+  if (isOffline === o) return;
   isOffline = o;
   offlineBanner.classList.toggle('show', o);
   document.body.classList.toggle('offline', o);
 }
-window.addEventListener('online',  () => setOffline(false));
+async function probeOnline() {
+  try {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), 2000);
+    // no-cors HEAD against api.openai.com: opaque success means the network
+    // reaches OpenAI; any network-level block (DevTools Offline, real outage)
+    // throws.
+    await fetch('https://api.openai.com/', {
+      method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal: c.signal
+    });
+    clearTimeout(t);
+    setOffline(false);
+  } catch {
+    setOffline(true);
+  }
+}
+window.addEventListener('online',  probeOnline);
 window.addEventListener('offline', () => setOffline(true));
-window.addEventListener('pageshow', () => setOffline(!navigator.onLine));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') probeOnline();
+});
 setOffline(isOffline);
+probeOnline(); // verify reality on load — corrects a lying navigator.onLine
 
-// Wraps fetch so any network-level failure (TypeError "Failed to fetch") flips
-// the app into the offline state immediately, even if navigator.onLine lies.
+// Wraps fetch so any network-level failure (TypeError) flips the app to
+// offline immediately, even if navigator.onLine still lies.
 async function safeFetch(input, init) {
   try {
     const res = await fetch(input, init);
-    if (isOffline) setOffline(false); // got a response — we're back
+    if (isOffline) setOffline(false);
     return res;
   } catch (err) {
     if (err instanceof TypeError) setOffline(true);
