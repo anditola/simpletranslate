@@ -302,7 +302,9 @@ const STATUS = {
   it: { idle: 'Clicca per parlare',  recording: '● Registrazione — clicca per fermare', transcribing: 'Ascolto',   translating: 'Traduco' }
 };
 
-let apiKey = localStorage.getItem('openai_key') || '';
+let apiKey = '';
+// Security: do not persist API keys in localStorage (clear legacy value if present).
+localStorage.removeItem('openai_key');
 
 const VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'];
 const settings = {
@@ -369,7 +371,6 @@ keyInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveAll(); })
 
 function saveAll() {
   apiKey = keyInput.value.trim();
-  localStorage.setItem('openai_key', apiKey);
   settings.voice = voiceSelect.value;
   settings.ttsSpeed = parseFloat(speedSlider.value);
   settings.vadEnabled = vadToggle.checked;
